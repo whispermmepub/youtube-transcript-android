@@ -37,13 +37,16 @@ export async function deleteDocument(id: string): Promise<TranscriptDocument[]> 
 
 export function importedToDocument(imported: ImportedTranscript): TranscriptDocument {
   const now = Date.now();
+  const stableId = imported.videoId || `local-${now}`;
   return {
-    id: `${imported.videoId}-${now}`,
+    id: `${stableId}-${now}`,
     videoId: imported.videoId,
-    title: imported.title || "Untitled YouTube video",
+    title: imported.title || imported.fileName || "Untitled transcript",
     url: imported.url,
     language: imported.language,
     source: imported.source,
+    provider: imported.provider,
+    fileName: imported.fileName,
     segments: imported.segments,
     originalText: imported.originalText,
     editedText: imported.originalText,
