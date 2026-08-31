@@ -1,6 +1,6 @@
 {
   "name": "youtube-transcript-studio",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
+    "@expo/metro-runtime": "~6.1.2",
     "@react-native-async-storage/async-storage": "^2.2.0",
     "@react-navigation/bottom-tabs": "^7.8.12",
     "@react-navigation/elements": "^2.9.2",
@@ -28,6 +29,7 @@
     "@trpc/client": "11.7.2",
     "@trpc/react-query": "11.7.2",
     "@trpc/server": "11.7.2",
+    "@wokcito/ffmpeg-kit-react-native": "6.1.2",
     "axios": "^1.13.2",
     "clsx": "^2.1.1",
     "cookie": "^1.1.1",
@@ -71,6 +73,7 @@
     "react-native-worklets": "0.5.1",
     "superjson": "^1.13.3",
     "tailwind-merge": "^2.6.0",
+    "whisper.rn": "0.7.4",
     "zod": "^4.2.1"
   },
   "devDependencies": {

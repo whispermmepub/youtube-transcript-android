@@ -69,6 +69,7 @@ export function textToDocument(text: string, title = "Pasted transcript", source
     url: sourceUrl.trim(),
     language: language.trim() || "unknown",
     source: "pasted",
+    provider: "manual",
     segments: parsed.segments,
     originalText: parsed.cleanText,
     sourceText: parsed.sourceText,
