@@ -1,9 +1,7 @@
-import * as SecureStore from "expo-secure-store";
-
 import type { ImportedTranscript, TranscriptSegment } from "@/shared/transcript";
+import { getProviderKey, saveProviderKey } from "@/lib/ai-providers";
 import { parseYouTubeLink } from "@/lib/youtube";
 
-const GEMINI_KEY = "youtube-transcript-studio.gemini-api-key.v1";
 const GEMINI_MODEL = "gemini-3.7-flash";
 
 export type DirectImportResult = ImportedTranscript & {
@@ -11,18 +9,11 @@ export type DirectImportResult = ImportedTranscript & {
 };
 
 export async function getGeminiApiKey(): Promise<string> {
-  return (await SecureStore.getItemAsync(GEMINI_KEY))?.trim() ?? "";
+  return getProviderKey("gemini");
 }
 
 export async function saveGeminiApiKey(value: string): Promise<void> {
-  const clean = value.trim();
-  if (!clean) {
-    await SecureStore.deleteItemAsync(GEMINI_KEY);
-    return;
-  }
-  await SecureStore.setItemAsync(GEMINI_KEY, clean, {
-    keychainAccessible: SecureStore.WHEN_UNLOCKED,
-  });
+  await saveProviderKey("gemini", value);
 }
 
 function cleanText(value: string): string {
@@ -62,11 +53,25 @@ type CaptionTrack = {
   baseUrl?: string;
   languageCode?: string;
   kind?: string;
+  name?: { simpleText?: string; runs?: Array<{ text?: string }> };
+  isTranslatable?: boolean;
 };
+
+function normalizeLanguageHint(language?: string): string | undefined {
+  const value = language?.trim().toLowerCase();
+  if (!value) return undefined;
+  const aliases: Record<string, string> = {
+    burmese: "my",
+    myanmar: "my",
+    english: "en",
+    thai: "th",
+  };
+  return aliases[value] ?? value.split(/[-_]/u)[0];
+}
 
 function chooseTrack(tracks: CaptionTrack[], language?: string): CaptionTrack | null {
   if (!tracks.length) return null;
-  const requested = language?.trim().toLowerCase();
+  const requested = normalizeLanguageHint(language);
   if (requested) {
     const exact = tracks.find((track) => track.languageCode?.toLowerCase() === requested);
     if (exact) return exact;
@@ -91,6 +96,66 @@ async function fetchTitle(url: string, videoId: string): Promise<string> {
   return `YouTube ${videoId}`;
 }
 
+function parseJson3(data: any): TranscriptSegment[] {
+  const events = Array.isArray(data?.events) ? data.events : [];
+  const segments: TranscriptSegment[] = [];
+  for (const event of events) {
+    const text = cleanText(Array.isArray(event?.segs) ? event.segs.map((seg: any) => seg?.utf8 ?? "").join("") : "");
+    if (!text) continue;
+    const start = Math.max(0, Number(event?.tStartMs ?? 0) / 1000 || 0);
+    const duration = Math.max(0, Number(event?.dDurationMs ?? 0) / 1000 || 0);
+    segments.push({ text, start, duration });
+  }
+  return segments;
+}
+
+function decodeXml(value: string): string {
+  return value
+    .replace(/&amp;/giu, "&")
+    .replace(/&lt;/giu, "<")
+    .replace(/&gt;/giu, ">")
+    .replace(/&quot;/giu, '"')
+    .replace(/&#39;/giu, "'")
+    .replace(/<[^>]*>/gu, "")
+    .trim();
+}
+
+function parseXmlCaptions(xml: string): TranscriptSegment[] {
+  const segments: TranscriptSegment[] = [];
+  const regex = /<text\b([^>]*)>([\s\S]*?)<\/text>/giu;
+  for (const match of xml.matchAll(regex)) {
+    const attrs = match[1] ?? "";
+    const start = Number(attrs.match(/\bstart="([^"]+)"/iu)?.[1] ?? 0) || 0;
+    const duration = Number(attrs.match(/\bdur="([^"]+)"/iu)?.[1] ?? 0) || 0;
+    const text = cleanText(decodeXml(match[2] ?? ""));
+    if (text) segments.push({ text, start: Math.max(0, start), duration: Math.max(0, duration) });
+  }
+  return segments;
+}
+
+async function fetchCaptionSegments(baseUrl: string): Promise<TranscriptSegment[]> {
+  const separator = baseUrl.includes("?") ? "&" : "?";
+  try {
+    const jsonResponse = await fetch(`${baseUrl}${separator}fmt=json3`);
+    if (jsonResponse.ok) {
+      const segments = parseJson3(await jsonResponse.json());
+      if (segments.length) return segments;
+    }
+  } catch {
+    // Try XML below.
+  }
+  try {
+    const xmlResponse = await fetch(baseUrl);
+    if (xmlResponse.ok) {
+      const segments = parseXmlCaptions(await xmlResponse.text());
+      if (segments.length) return segments;
+    }
+  } catch {
+    // No usable direct caption representation.
+  }
+  return [];
+}
+
 async function tryYouTubeCaptions(
   url: string,
   language?: string,
@@ -112,28 +177,20 @@ async function tryYouTubeCaptions(
   } catch {
     return null;
   }
-  const track = chooseTrack(tracks, language);
-  if (!track?.baseUrl) return null;
 
-  const separator = track.baseUrl.includes("?") ? "&" : "?";
-  const captionResponse = await fetch(`${track.baseUrl}${separator}fmt=json3`);
-  if (!captionResponse.ok) return null;
-  const data = await captionResponse.json() as any;
-  const events = Array.isArray(data?.events) ? data.events : [];
-  const segments: TranscriptSegment[] = [];
-  for (const event of events) {
-    const text = cleanText(Array.isArray(event?.segs) ? event.segs.map((seg: any) => seg?.utf8 ?? "").join("") : "");
-    if (!text) continue;
-    const start = Math.max(0, Number(event?.tStartMs ?? 0) / 1000 || 0);
-    const duration = Math.max(0, Number(event?.dDurationMs ?? 0) / 1000 || 0);
-    segments.push({ text, start, duration });
+  const preferred = chooseTrack(tracks, language);
+  const ordered = preferred ? [preferred, ...tracks.filter((track) => track !== preferred)] : tracks;
+  for (const track of ordered.slice(0, 8)) {
+    if (!track?.baseUrl) continue;
+    const segments = await fetchCaptionSegments(track.baseUrl);
+    if (!segments.length) continue;
+    return {
+      language: track.languageCode || language || "unknown",
+      source: track.kind === "asr" ? "automatic" : "creator",
+      segments,
+    };
   }
-  if (!segments.length) return null;
-  return {
-    language: track.languageCode || language || "unknown",
-    source: track.kind === "asr" ? "automatic" : "creator",
-    segments,
-  };
+  return null;
 }
 
 function parseGeminiJson(text: string): { language: string; segments: TranscriptSegment[] } {
@@ -160,7 +217,7 @@ async function tryGemini(
 ): Promise<{ language: string; segments: TranscriptSegment[] }> {
   const hint = language?.trim() ? ` Preferred language hint: ${language.trim()}.` : "";
   const prompt = [
-    "Transcribe every spoken word in this YouTube video faithfully.",
+    "Transcribe every spoken word in this public YouTube video faithfully.",
     hint,
     "Do not summarize, translate, censor, rewrite, or invent missing speech.",
     "Preserve Myanmar/Burmese Unicode and the original spoken language exactly.",
@@ -169,29 +226,17 @@ async function tryGemini(
     "start and duration must be seconds as numbers.",
   ].join(" ");
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        contents: [{
-          role: "user",
-          parts: [
-            { text: prompt },
-            { file_data: { file_uri: url } },
-          ],
-        }],
-        generationConfig: {
-          temperature: 0,
-          responseMimeType: "application/json",
-        },
-      }),
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": apiKey,
     },
-  );
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: prompt }, { file_data: { file_uri: url } }] }],
+      generationConfig: { temperature: 0, responseMimeType: "application/json" },
+    }),
+  });
 
   const payload = await response.json().catch(() => null) as any;
   if (!response.ok) {
@@ -235,12 +280,12 @@ export async function importDirectTranscript(
       };
     }
   } catch {
-    // Native YouTube extraction is best-effort; AI remains a fallback only.
+    // YouTube caption extraction is best-effort. Direct Gemini remains optional.
   }
 
-  const apiKey = await getGeminiApiKey();
+  const apiKey = await getProviderKey("gemini");
   if (!apiKey) {
-    const error = new Error("ဒီ video မှာ usable caption မတွေ့ပါ။ AI fallback သုံးချင်ရင် Gemini API key ကို AI Fallback ထဲ တစ်ခါထည့်ပါ။");
+    const error = new Error("ဒီ video မှာ usable YouTube caption မတွေ့ပါ။ Link ကို AI နဲ့ဆက်လုပ်ချင်ရင် Gemini key ထည့်ပါ၊ ဒါမှမဟုတ် Audio/Video file ကိုရွေးပြီး Offline/Groq/OpenAI နဲ့လုပ်နိုင်ပါတယ်။");
     (error as Error & { code?: string }).code = "AI_KEY_REQUIRED";
     throw error;
   }
