@@ -6,10 +6,12 @@ export type RemoteImportResult = ImportedTranscript & {
   provider: "youtube" | "gemini" | "groq";
 };
 
+const DEFAULT_API_URL = "https://group-guardian-bot-production.up.railway.app";
+
 function getApiUrl(): string {
   const configured = Constants.expoConfig?.extra?.transcriptApiUrl;
   if (typeof configured === "string" && configured.trim()) return configured.replace(/\/$/u, "");
-  throw new Error("Transcript service is not configured in this build.");
+  return DEFAULT_API_URL;
 }
 
 export async function importYouTubeTranscript(url: string, language?: string): Promise<RemoteImportResult> {
