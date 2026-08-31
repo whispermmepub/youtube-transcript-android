@@ -1,6 +1,6 @@
 import { FFmpegKit, FFprobeKit, ReturnCode } from "@wokcito/ffmpeg-kit-react-native";
 import { Directory, File, Paths } from "expo-file-system";
-import { initWhisper } from "whisper.rn";
+import { initWhisper } from "whisper.rn/index";
 
 import { getConfiguredProviders, transcribeCloudFileAuto, type CloudProvider } from "@/lib/ai-providers";
 import { parseSubtitle } from "@/lib/subtitle-parser";
@@ -152,12 +152,12 @@ export async function ensureOfflineModel(onStage?: FileImportOptions["onStage"])
   if (model.exists) model.delete();
   onStage?.("downloading-model", "Downloading the ~60 MB multilingual offline model once…");
   try {
-    const downloaded = await File.downloadFileAsync(MODEL_URL, model);
-    if (!downloaded.exists || downloaded.size < MIN_MODEL_BYTES) {
-      if (downloaded.exists) downloaded.delete();
+    await File.downloadFileAsync(MODEL_URL, model);
+    if (!model.exists || model.size < MIN_MODEL_BYTES) {
+      if (model.exists) model.delete();
       throw new Error("Offline model download was incomplete.");
     }
-    return downloaded;
+    return model;
   } catch (error) {
     if (model.exists && model.size < MIN_MODEL_BYTES) model.delete();
     throw error;
@@ -239,9 +239,10 @@ function importedFromFile(
 
 export async function pickTranscriptFile(): Promise<File> {
   const picked = await File.pickFileAsync();
-  const file = Array.isArray(picked) ? picked[0] : picked;
-  if (!file) throw new Error("No file selected.");
-  return file;
+  const candidate = Array.isArray(picked) ? picked[0] : picked;
+  const uri = (candidate as { uri?: string } | null)?.uri;
+  if (!uri) throw new Error("No file selected.");
+  return new File(uri);
 }
 
 async function localSpeechTranscript(file: File, options: FileImportOptions): Promise<ImportedTranscript> {
@@ -287,7 +288,6 @@ export async function importMediaFile(input: File, options: FileImportOptions = 
     try {
       return await cloudTranscript(file, options);
     } catch {
-      // Cloud failure must not make the file unusable. Fall back to local transcription.
       return localSpeechTranscript(file, options);
     }
   }
