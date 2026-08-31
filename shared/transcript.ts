@@ -1,6 +1,23 @@
 export type LinkKind = "video" | "playlist";
 
-export type TranscriptSource = "creator" | "automatic" | "pasted" | "ai";
+export type TranscriptSource =
+  | "creator"
+  | "automatic"
+  | "pasted"
+  | "subtitle"
+  | "embedded"
+  | "local"
+  | "ai";
+
+export type TranscriptProvider =
+  | "youtube"
+  | "subtitle-file"
+  | "embedded-subtitle"
+  | "whisper-local"
+  | "gemini"
+  | "groq"
+  | "openai"
+  | "manual";
 
 export type TranscriptSegment = {
   text: string;
@@ -15,6 +32,8 @@ export type TranscriptDocument = {
   url: string;
   language: string;
   source: TranscriptSource;
+  provider?: TranscriptProvider;
+  fileName?: string;
   segments: TranscriptSegment[];
   originalText: string;
   sourceText?: string;
@@ -29,6 +48,8 @@ export type ImportedTranscript = {
   url: string;
   language: string;
   source: TranscriptSource;
+  provider?: TranscriptProvider;
+  fileName?: string;
   segments: TranscriptSegment[];
   originalText: string;
 };
