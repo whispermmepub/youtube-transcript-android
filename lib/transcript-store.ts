@@ -1,6 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import type { ImportedTranscript, TranscriptDocument } from "@/shared/transcript";
+import { textToDocument } from "@/lib/transcript-content";
+
+export { textToDocument };
 
 const STORAGE_KEY = "youtube-transcript-studio.documents.v1";
 
