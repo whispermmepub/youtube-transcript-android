@@ -18,11 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ScreenContainer } from "@/components/screen-container";
 import { useColors } from "@/hooks/use-colors";
-import {
-  getConfiguredProviders,
-  saveProviderKey,
-  type CloudProvider,
-} from "@/lib/ai-providers";
+import { getConfiguredProviders, saveProviderKey, type CloudProvider } from "@/lib/ai-providers";
 import { importDirectTranscript } from "@/lib/direct-transcript";
 import { exportDocx } from "@/lib/docx-export";
 import {
@@ -40,43 +36,40 @@ import { wordCount } from "@/shared/transcript";
 
 type Status = { tone: "error" | "success" | "info"; text: string };
 type HomeMode = "youtube" | "file";
-
+type ProviderFlags = Record<CloudProvider, boolean>;
 type ProviderDrafts = Record<CloudProvider, string>;
-type ProviderConfigured = Record<CloudProvider, boolean>;
 
-const PROVIDERS: Array<{ id: CloudProvider; title: string; subtitle: string }> = [
-  { id: "gemini", title: "Gemini / Google AI Studio", subtitle: "Public YouTube URL + uploaded media fallback" },
-  { id: "groq", title: "Groq Whisper", subtitle: "Fast, accurate speech-to-text for audio/video files" },
-  { id: "openai", title: "OpenAI Transcribe", subtitle: "High-quality audio/video transcription fallback" },
+const PROVIDERS: Array<{ id: CloudProvider; title: string; note: string }> = [
+  { id: "gemini", title: "Gemini / AI Studio", note: "Public YouTube URL + media fallback" },
+  { id: "groq", title: "Groq Whisper", note: "Fast speech-to-text for local media" },
+  { id: "openai", title: "OpenAI Transcribe", note: "High-quality speech-to-text fallback" },
 ];
 
-const FILE_MODES: Array<{ id: FileImportMode; title: string; subtitle: string }> = [
-  { id: "auto", title: "Auto · Local First", subtitle: "Subtitle → Offline Whisper → cloud only if local fails" },
-  { id: "subtitle-only", title: "No Speech AI", subtitle: "Only subtitle/text tracks. No speech model, no cloud." },
-  { id: "no-cloud", title: "No Cloud", subtitle: "Subtitle → offline Whisper. Media never sent to cloud." },
-  { id: "best-quality", title: "Best Quality", subtitle: "Subtitle first, then configured cloud STT; local fallback if cloud fails." },
+const FILE_MODES: Array<{ id: FileImportMode; title: string; note: string }> = [
+  { id: "auto", title: "Auto · Local First", note: "Subtitle → offline → cloud only if needed" },
+  { id: "subtitle-only", title: "No Speech AI", note: "Subtitle/text only. No speech model." },
+  { id: "no-cloud", title: "No Cloud", note: "Subtitle → offline Whisper only" },
+  { id: "best-quality", title: "Best Quality", note: "Subtitle → cloud STT → local fallback" },
 ];
 
-function fireHaptic(style: Haptics.ImpactFeedbackStyle = Haptics.ImpactFeedbackStyle.Light) {
+function haptic(style: Haptics.ImpactFeedbackStyle = Haptics.ImpactFeedbackStyle.Light) {
   if (Platform.OS !== "web") void Haptics.impactAsync(style);
 }
 
-function formatDate(value: number): string {
+function timeLabel(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function dateLabel(value: number): string {
   try {
-    return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(value);
+    return new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(value);
   } catch {
     return new Date(value).toLocaleDateString();
   }
-}
-
-function formatTime(seconds: number): string {
-  const total = Math.max(0, Math.floor(seconds));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const secs = total % 60;
-  return hours > 0
-    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`
-    : `${minutes}:${String(secs).padStart(2, "0")}`;
 }
 
 function providerLabel(provider?: TranscriptProvider, source?: TranscriptDocument["source"]): string {
@@ -88,248 +81,17 @@ function providerLabel(provider?: TranscriptProvider, source?: TranscriptDocumen
   if (provider === "groq") return "Groq Whisper";
   if (provider === "openai") return "OpenAI Transcribe";
   if (provider === "manual") return "Manual paste";
-  if (source === "automatic") return "Automatic captions";
-  if (source === "creator") return "Creator captions";
-  if (source === "ai") return "Cloud transcription";
-  return "Local transcript";
+  return source === "ai" ? "Cloud transcription" : "Local transcript";
 }
 
-function SourceBadge({ document, colors }: { document: TranscriptDocument; colors: ReturnType<typeof useColors> }) {
-  const cloud = document.provider === "gemini" || document.provider === "groq" || document.provider === "openai";
-  const local = document.provider === "whisper-local" || document.provider === "embedded-subtitle" || document.provider === "subtitle-file" || document.provider === "manual";
-  const color = cloud ? colors.warning : local ? colors.success : colors.primary;
+function ProviderBadge({ document, colors }: { document: TranscriptDocument; colors: ReturnType<typeof useColors> }) {
+  const cloud = ["gemini", "groq", "openai"].includes(document.provider ?? "");
+  const color = cloud ? colors.warning : document.provider === "youtube" ? colors.primary : colors.success;
   return (
-    <View style={[styles.sourceBadge, { backgroundColor: color + "18" }]}>
-      <View style={[styles.sourceDot, { backgroundColor: color }]} />
-      <Text style={[styles.sourceBadgeText, { color }]}>{providerLabel(document.provider, document.source)}</Text>
+    <View style={[styles.badge, { backgroundColor: color + "18" }]}>
+      <View style={[styles.dot, { backgroundColor: color }]} />
+      <Text style={[styles.badgeText, { color }]}>{providerLabel(document.provider, document.source)}</Text>
     </View>
-  );
-}
-
-function TranscriptRow({ document, onOpen, colors }: { document: TranscriptDocument; onOpen: () => void; colors: ReturnType<typeof useColors> }) {
-  return (
-    <TouchableOpacity
-      onPress={onOpen}
-      activeOpacity={0.78}
-      style={[styles.transcriptRow, { borderColor: colors.border, backgroundColor: colors.surface }]}
-      accessibilityRole="button"
-      accessibilityLabel={`Open ${document.title}`}
-    >
-      <View style={[styles.rowIcon, { backgroundColor: colors.primary + "14" }]}>
-        <Text style={[styles.rowIconText, { color: colors.primary }]}>T</Text>
-      </View>
-      <View style={styles.rowContent}>
-        <Text numberOfLines={2} style={[styles.rowTitle, { color: colors.foreground }]}>{document.title}</Text>
-        <View style={styles.rowMeta}>
-          <Text style={[styles.rowMetaText, { color: colors.muted }]}>{providerLabel(document.provider, document.source)}</Text>
-          <View style={[styles.metaSeparator, { backgroundColor: colors.border }]} />
-          <Text style={[styles.rowMetaText, { color: colors.muted }]}>{formatDate(document.updatedAt)}</Text>
-        </View>
-      </View>
-      <Text style={[styles.rowChevron, { color: colors.muted }]}>›</Text>
-    </TouchableOpacity>
-  );
-}
-
-function SegmentPreview({ segment, colors }: { segment: TranscriptSegment; colors: ReturnType<typeof useColors> }) {
-  return (
-    <View style={styles.segmentRow}>
-      <Text style={[styles.segmentTime, { color: colors.primary }]}>{formatTime(segment.start)}</Text>
-      <Text style={[styles.segmentText, { color: colors.foreground }]}>{segment.text}</Text>
-    </View>
-  );
-}
-
-function Workspace({
-  document,
-  onBack,
-  onUpdate,
-  colors,
-}: {
-  document: TranscriptDocument;
-  onBack: () => void;
-  onUpdate: (document: TranscriptDocument) => void;
-  colors: ReturnType<typeof useColors>;
-}) {
-  const insets = useSafeAreaInsets();
-  const [mode, setMode] = useState<"read" | "edit">("read");
-  const [draft, setDraft] = useState(document.editedText);
-  const [showExport, setShowExport] = useState(false);
-  const [includeTimestamps, setIncludeTimestamps] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-
-  useEffect(() => {
-    setDraft(document.editedText);
-    setMode("read");
-    setSearchQuery("");
-  }, [document.id, document.editedText]);
-
-  const saveDraft = () => {
-    onUpdate({ ...document, editedText: draft, updatedAt: Date.now() });
-    setNotice("Changes saved on this device.");
-    fireHaptic();
-  };
-
-  const copyDraft = async () => {
-    await Clipboard.setStringAsync(draft);
-    setNotice("Transcript copied to clipboard.");
-    fireHaptic();
-  };
-
-  const resetDraft = () => {
-    setDraft(document.originalText);
-    onUpdate({ ...document, editedText: document.originalText, updatedAt: Date.now() });
-    setNotice("Original transcript restored.");
-    fireHaptic();
-  };
-
-  const runExport = async () => {
-    try {
-      await exportDocx({ ...document, editedText: draft }, includeTimestamps);
-      setShowExport(false);
-      setNotice("DOCX export is ready to save or share.");
-      fireHaptic(Haptics.ImpactFeedbackStyle.Medium);
-    } catch {
-      setNotice("DOCX export failed. Please try again.");
-    }
-  };
-
-  const allSegments = draft === document.originalText && document.segments.length > 0
-    ? document.segments
-    : draft.split(/\r?\n/u).filter(Boolean).map((text, index) => ({ text, start: index, duration: 0 }));
-  const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
-  const displaySegments = normalizedSearch
-    ? allSegments.filter((segment) => segment.text.toLocaleLowerCase().includes(normalizedSearch))
-    : allSegments;
-
-  return (
-    <ScreenContainer className="px-5" edges={["top", "left", "right", "bottom"]}>
-      <KeyboardAvoidingView
-        style={[styles.workspaceShell, { paddingBottom: Math.max(insets.bottom, 12) + 6 }]}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
-        <View style={styles.workspaceHeader}>
-          <TouchableOpacity onPress={onBack} style={styles.backButton} accessibilityRole="button" accessibilityLabel="Back to transcript library">
-            <Text style={[styles.backButtonText, { color: colors.primary }]}>‹</Text>
-            <Text style={[styles.backButtonLabel, { color: colors.primary }]}>Library</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => setShowExport(true)} style={[styles.headerExport, { backgroundColor: colors.primary + "14" }]} accessibilityRole="button" accessibilityLabel="Export DOCX">
-            <Text style={[styles.headerExportText, { color: colors.primary }]}>DOCX</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.workspaceTitleBlock}>
-          <Text style={[styles.workspaceEyebrow, { color: colors.primary }]}>TRANSCRIPT</Text>
-          <Text style={[styles.workspaceTitle, { color: colors.foreground }]}>{document.title}</Text>
-          <View style={styles.workspaceMetaLine}>
-            <Text style={[styles.workspaceLanguage, { color: colors.muted }]}>{formatSourceLanguage(document.language)}</Text>
-            <View style={[styles.metaSeparator, { backgroundColor: colors.border }]} />
-            <SourceBadge document={document} colors={colors} />
-          </View>
-        </View>
-
-        <View style={[styles.searchWrap, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-          <Text style={[styles.searchMark, { color: colors.muted }]}>⌕</Text>
-          <TextInput
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            placeholder="Search this transcript"
-            placeholderTextColor={colors.muted}
-            style={[styles.searchInput, { color: colors.foreground }]}
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchQuery("")} accessibilityRole="button">
-              <Text style={[styles.clearSearch, { color: colors.muted }]}>×</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        <View style={[styles.modeSwitch, { backgroundColor: colors.surface }]}>
-          <TouchableOpacity onPress={() => setMode("read")} style={[styles.modeOption, mode === "read" && { backgroundColor: colors.background }]}>
-            <Text style={[styles.modeOptionText, { color: mode === "read" ? colors.foreground : colors.muted }]}>Preview</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => setMode("edit")} style={[styles.modeOption, mode === "edit" && { backgroundColor: colors.background }]}>
-            <Text style={[styles.modeOptionText, { color: mode === "edit" ? colors.foreground : colors.muted }]}>Edit</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={[styles.transcriptPanel, { borderColor: colors.border, backgroundColor: colors.background }]}>
-          {mode === "read" ? (
-            <FlatList
-              data={displaySegments}
-              keyExtractor={(item, index) => `${document.id}-${index}-${item.start}`}
-              renderItem={({ item }) => <SegmentPreview segment={item} colors={colors} />}
-              contentContainerStyle={styles.segmentList}
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-            />
-          ) : (
-            <TextInput
-              value={draft}
-              onChangeText={setDraft}
-              multiline
-              textAlignVertical="top"
-              style={[styles.editor, { color: colors.foreground }]}
-              placeholder="Edit the transcript here..."
-              placeholderTextColor={colors.muted}
-            />
-          )}
-        </View>
-
-        <View style={styles.workspaceBottom}>
-          <View style={styles.countLine}>
-            <Text style={[styles.countText, { color: colors.muted }]}>{wordCount(draft).toLocaleString()} words</Text>
-            <Text style={[styles.countText, { color: colors.muted }]}>{normalizedSearch ? `${displaySegments.length} matches` : `${draft.length.toLocaleString()} characters`}</Text>
-          </View>
-          {notice && <Text style={[styles.inlineNotice, { color: colors.success }]}>{notice}</Text>}
-          {draft !== document.originalText && (
-            <TouchableOpacity onPress={resetDraft} style={styles.resetButton}>
-              <Text style={[styles.resetButtonText, { color: colors.primary }]}>Reset to original</Text>
-            </TouchableOpacity>
-          )}
-          <View style={styles.actionRow}>
-            <TouchableOpacity onPress={copyDraft} style={[styles.secondaryAction, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-              <Text style={[styles.secondaryActionText, { color: colors.foreground }]}>Copy</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={mode === "edit" ? saveDraft : () => setMode("edit")} style={[styles.primaryAction, { backgroundColor: colors.primary }]}>
-              <Text style={styles.primaryActionText}>{mode === "edit" ? "Save edits" : "Edit transcript"}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </KeyboardAvoidingView>
-
-      <Modal visible={showExport} transparent animationType="slide" onRequestClose={() => setShowExport(false)}>
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.exportSheet, { backgroundColor: colors.background, paddingBottom: Math.max(insets.bottom, 18) + 16 }]}>
-            <View style={styles.sheetHandle} />
-            <View style={styles.sheetHeader}>
-              <View>
-                <Text style={[styles.sheetEyebrow, { color: colors.primary }]}>DOCUMENT EXPORT</Text>
-                <Text style={[styles.sheetTitle, { color: colors.foreground }]}>Export as DOCX</Text>
-              </View>
-              <TouchableOpacity onPress={() => setShowExport(false)} style={styles.closeButton}>
-                <Text style={[styles.closeButtonText, { color: colors.muted }]}>×</Text>
-              </TouchableOpacity>
-            </View>
-            <Text style={[styles.sheetBody, { color: colors.muted }]}>Your edited transcript will be packaged as a Word document and opened in the Android share sheet.</Text>
-            <TouchableOpacity onPress={() => setIncludeTimestamps((value) => !value)} style={[styles.optionRow, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-              <View style={[styles.checkbox, { borderColor: includeTimestamps ? colors.primary : colors.border, backgroundColor: includeTimestamps ? colors.primary : "transparent" }]}>
-                {includeTimestamps && <Text style={styles.checkboxMark}>✓</Text>}
-              </View>
-              <View style={styles.optionCopy}>
-                <Text style={[styles.optionTitle, { color: colors.foreground }]}>Include timestamps</Text>
-                <Text style={[styles.optionSubtitle, { color: colors.muted }]}>Add available timestamps to the document</Text>
-              </View>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={runExport} style={[styles.primaryButton, { backgroundColor: colors.primary }]}>
-              <Text style={styles.primaryButtonText}>Export DOCX</Text>
-              <Text style={styles.primaryButtonArrow}>→</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-    </ScreenContainer>
   );
 }
 
@@ -337,438 +99,363 @@ function StatusCard({ status, colors }: { status: Status | null; colors: ReturnT
   if (!status) return null;
   const color = status.tone === "error" ? colors.error : status.tone === "success" ? colors.success : colors.primary;
   return (
-    <View style={[styles.statusCard, { backgroundColor: color + "12" }]}>
-      <View style={[styles.statusIcon, { backgroundColor: color }]}>
-        <Text style={styles.statusIconText}>{status.tone === "error" ? "!" : status.tone === "success" ? "✓" : "i"}</Text>
+    <View style={[styles.status, { backgroundColor: color + "12" }]}>
+      <View style={[styles.statusMark, { backgroundColor: color }]}>
+        <Text style={styles.statusMarkText}>{status.tone === "error" ? "!" : status.tone === "success" ? "✓" : "i"}</Text>
       </View>
       <Text style={[styles.statusText, { color: colors.foreground }]}>{status.text}</Text>
     </View>
   );
 }
 
+function TranscriptRow({ item, onPress, colors }: { item: TranscriptDocument; onPress: () => void; colors: ReturnType<typeof useColors> }) {
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.78} style={[styles.row, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+      <View style={[styles.rowIcon, { backgroundColor: colors.primary + "15" }]}><Text style={[styles.rowIconText, { color: colors.primary }]}>T</Text></View>
+      <View style={styles.rowBody}>
+        <Text numberOfLines={2} style={[styles.rowTitle, { color: colors.foreground }]}>{item.title}</Text>
+        <Text style={[styles.rowMeta, { color: colors.muted }]}>{providerLabel(item.provider, item.source)} · {dateLabel(item.updatedAt)}</Text>
+      </View>
+      <Text style={[styles.chevron, { color: colors.muted }]}>›</Text>
+    </TouchableOpacity>
+  );
+}
+
+function TranscriptSegmentRow({ item, colors }: { item: TranscriptSegment; colors: ReturnType<typeof useColors> }) {
+  return (
+    <View style={styles.segmentRow}>
+      <Text style={[styles.segmentTime, { color: colors.primary }]}>{timeLabel(item.start)}</Text>
+      <Text style={[styles.segmentText, { color: colors.foreground }]}>{item.text}</Text>
+    </View>
+  );
+}
+
+function Workspace({ document, colors, onBack, onUpdate }: {
+  document: TranscriptDocument;
+  colors: ReturnType<typeof useColors>;
+  onBack: () => void;
+  onUpdate: (document: TranscriptDocument) => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const [mode, setMode] = useState<"preview" | "edit">("preview");
+  const [draft, setDraft] = useState(document.editedText);
+  const [query, setQuery] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const [showExport, setShowExport] = useState(false);
+  const [timestamps, setTimestamps] = useState(false);
+
+  useEffect(() => {
+    setDraft(document.editedText);
+    setMode("preview");
+    setQuery("");
+  }, [document.id, document.editedText]);
+
+  const segments = useMemo(() => {
+    const base = draft === document.originalText && document.segments.length
+      ? document.segments
+      : draft.split(/\r?\n/u).filter(Boolean).map((text, index) => ({ text, start: index, duration: 0 }));
+    const q = query.trim().toLocaleLowerCase();
+    return q ? base.filter((segment) => segment.text.toLocaleLowerCase().includes(q)) : base;
+  }, [document.originalText, document.segments, draft, query]);
+
+  const save = () => {
+    onUpdate({ ...document, editedText: draft, updatedAt: Date.now() });
+    setNotice("Saved locally.");
+    haptic();
+  };
+
+  const copy = async () => {
+    await Clipboard.setStringAsync(draft);
+    setNotice("Copied to clipboard.");
+    haptic();
+  };
+
+  const doExport = async () => {
+    try {
+      await exportDocx({ ...document, editedText: draft }, timestamps);
+      setShowExport(false);
+      setNotice("DOCX is ready to save/share.");
+    } catch {
+      setNotice("DOCX export failed.");
+    }
+  };
+
+  return (
+    <ScreenContainer className="px-5" edges={["top", "left", "right", "bottom"]}>
+      <KeyboardAvoidingView style={[styles.workspace, { paddingBottom: Math.max(insets.bottom, 10) + 4 }]} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <View style={styles.workspaceTop}>
+          <TouchableOpacity onPress={onBack} style={styles.back}><Text style={[styles.backText, { color: colors.primary }]}>‹ Library</Text></TouchableOpacity>
+          <TouchableOpacity onPress={() => setShowExport(true)} style={[styles.docxButton, { backgroundColor: colors.primary + "14" }]}><Text style={[styles.docxText, { color: colors.primary }]}>DOCX</Text></TouchableOpacity>
+        </View>
+        <Text style={[styles.kicker, { color: colors.primary }]}>TRANSCRIPT</Text>
+        <Text style={[styles.workspaceTitle, { color: colors.foreground }]}>{document.title}</Text>
+        <View style={styles.metaLine}>
+          <Text style={[styles.metaText, { color: colors.muted }]}>{formatSourceLanguage(document.language)}</Text>
+          <ProviderBadge document={document} colors={colors} />
+        </View>
+
+        <View style={[styles.search, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <TextInput value={query} onChangeText={setQuery} placeholder="Search transcript" placeholderTextColor={colors.muted} style={[styles.searchInput, { color: colors.foreground }]} />
+          {!!query && <TouchableOpacity onPress={() => setQuery("")}><Text style={[styles.clear, { color: colors.muted }]}>×</Text></TouchableOpacity>}
+        </View>
+
+        <View style={[styles.switch, { backgroundColor: colors.surface }]}>
+          {(["preview", "edit"] as const).map((value) => (
+            <TouchableOpacity key={value} onPress={() => setMode(value)} style={[styles.switchItem, mode === value && { backgroundColor: colors.background }]}>
+              <Text style={[styles.switchText, { color: mode === value ? colors.foreground : colors.muted }]}>{value === "preview" ? "Preview" : "Edit"}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <View style={[styles.panel, { borderColor: colors.border, backgroundColor: colors.background }]}>
+          {mode === "preview" ? (
+            <FlatList data={segments} keyExtractor={(item, index) => `${item.start}-${index}`} renderItem={({ item }) => <TranscriptSegmentRow item={item} colors={colors} />} contentContainerStyle={styles.segmentList} showsVerticalScrollIndicator={false} />
+          ) : (
+            <TextInput value={draft} onChangeText={setDraft} multiline textAlignVertical="top" placeholder="Edit transcript…" placeholderTextColor={colors.muted} style={[styles.editor, { color: colors.foreground }]} />
+          )}
+        </View>
+
+        <View style={styles.workspaceFooter}>
+          <View style={styles.counts}>
+            <Text style={[styles.tiny, { color: colors.muted }]}>{wordCount(draft).toLocaleString()} words</Text>
+            <Text style={[styles.tiny, { color: colors.muted }]}>{draft.length.toLocaleString()} characters</Text>
+          </View>
+          {!!notice && <Text style={[styles.notice, { color: colors.success }]}>{notice}</Text>}
+          {draft !== document.originalText && <TouchableOpacity onPress={() => setDraft(document.originalText)}><Text style={[styles.reset, { color: colors.primary }]}>Reset to original</Text></TouchableOpacity>}
+          <View style={styles.actionRow}>
+            <TouchableOpacity onPress={copy} style={[styles.secondary, { backgroundColor: colors.surface, borderColor: colors.border }]}><Text style={[styles.secondaryText, { color: colors.foreground }]}>Copy</Text></TouchableOpacity>
+            <TouchableOpacity onPress={mode === "edit" ? save : () => setMode("edit")} style={[styles.primary, { backgroundColor: colors.primary }]}><Text style={styles.primaryText}>{mode === "edit" ? "Save edits" : "Edit transcript"}</Text></TouchableOpacity>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+
+      <Modal visible={showExport} transparent animationType="slide" onRequestClose={() => setShowExport(false)}>
+        <View style={styles.backdrop}>
+          <View style={[styles.sheet, { backgroundColor: colors.background, paddingBottom: Math.max(insets.bottom, 18) + 16 }]}>
+            <View style={styles.handle} />
+            <View style={styles.sheetTop}><Text style={[styles.sheetTitle, { color: colors.foreground }]}>Export DOCX</Text><TouchableOpacity onPress={() => setShowExport(false)}><Text style={[styles.close, { color: colors.muted }]}>×</Text></TouchableOpacity></View>
+            <TouchableOpacity onPress={() => setTimestamps((value) => !value)} style={[styles.option, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              <View style={[styles.checkbox, { borderColor: timestamps ? colors.primary : colors.border, backgroundColor: timestamps ? colors.primary : "transparent" }]}>{timestamps && <Text style={styles.check}>✓</Text>}</View>
+              <View><Text style={[styles.optionTitle, { color: colors.foreground }]}>Include timestamps</Text><Text style={[styles.optionNote, { color: colors.muted }]}>Use timestamps when available</Text></View>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={doExport} style={[styles.bigButton, { backgroundColor: colors.primary }]}><Text style={styles.bigButtonText}>Export & Share</Text></TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </ScreenContainer>
+  );
+}
+
 export default function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const [documents, setDocuments] = useState<TranscriptDocument[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
   const [homeMode, setHomeMode] = useState<HomeMode>("youtube");
   const [sourceUrl, setSourceUrl] = useState("");
   const [language, setLanguage] = useState("");
-  const [documents, setDocuments] = useState<TranscriptDocument[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [fileMode, setFileMode] = useState<FileImportMode>("auto");
   const [status, setStatus] = useState<Status | null>(null);
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState("");
-  const [fileMode, setFileMode] = useState<FileImportMode>("auto");
-  const [showSettings, setShowSettings] = useState(false);
-  const [providerDrafts, setProviderDrafts] = useState<ProviderDrafts>({ gemini: "", groq: "", openai: "" });
-  const [providerConfigured, setProviderConfigured] = useState<ProviderConfigured>({ gemini: false, groq: false, openai: false });
-  const [savingProvider, setSavingProvider] = useState<CloudProvider | null>(null);
+  const [settings, setSettings] = useState(false);
+  const [configured, setConfigured] = useState<ProviderFlags>({ gemini: false, groq: false, openai: false });
+  const [drafts, setDrafts] = useState<ProviderDrafts>({ gemini: "", groq: "", openai: "" });
+  const [saving, setSaving] = useState<CloudProvider | null>(null);
   const [offlineReady, setOfflineReady] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualTitle, setManualTitle] = useState("");
   const [manualText, setManualText] = useState("");
 
-  const selectedDocument = useMemo(() => documents.find((item) => item.id === selectedId) ?? null, [documents, selectedId]);
+  const selectedDocument = useMemo(() => documents.find((item) => item.id === selected) ?? null, [documents, selected]);
 
-  const refreshProviderState = async () => {
-    const configured = new Set(await getConfiguredProviders());
-    setProviderConfigured({
-      gemini: configured.has("gemini"),
-      groq: configured.has("groq"),
-      openai: configured.has("openai"),
-    });
+  const refreshEngine = async () => {
+    const enabled = new Set(await getConfiguredProviders());
+    setConfigured({ gemini: enabled.has("gemini"), groq: enabled.has("groq"), openai: enabled.has("openai") });
     setOfflineReady(isOfflineModelReady());
   };
 
   useEffect(() => {
-    loadDocuments().then(setDocuments);
-    void refreshProviderState();
+    void loadDocuments().then(setDocuments);
+    void refreshEngine();
   }, []);
 
-  const saveAndOpen = async (document: TranscriptDocument) => {
-    const next = [document, ...documents.filter((item) => item.id !== document.id && (!document.videoId || item.videoId !== document.videoId))].slice(0, 100);
+  const storeAndOpen = async (document: TranscriptDocument) => {
+    const next = [document, ...documents.filter((item) => item.id !== document.id && item.videoId !== document.videoId)].slice(0, 100);
     await persistDocuments(next);
     setDocuments(next);
-    setSelectedId(document.id);
+    setSelected(document.id);
   };
 
-  const handlePasteLink = async () => {
+  const pasteLink = async () => {
     const value = (await Clipboard.getStringAsync()).trim();
-    if (!value) {
-      setStatus({ tone: "info", text: "Clipboard ထဲမှာ link မတွေ့ပါ။" });
-      return;
-    }
+    if (!value) return setStatus({ tone: "info", text: "Clipboard ထဲမှာ link မတွေ့ပါ။" });
     setSourceUrl(value);
     setStatus(null);
-    fireHaptic();
+    haptic();
   };
 
-  const handleYouTubeImport = async () => {
-    if (!sourceUrl.trim()) {
-      setStatus({ tone: "error", text: "YouTube video link ကို အရင်ထည့်ပါ။" });
-      return;
-    }
-    setBusy(true);
-    setStatus(null);
-    setStage("YouTube link ကို စစ်နေပါတယ်…");
+  const importYouTube = async () => {
+    if (!sourceUrl.trim()) return setStatus({ tone: "error", text: "YouTube video link ကို အရင်ထည့်ပါ။" });
+    setBusy(true); setStatus(null); setStage("YouTube link ကို စစ်နေပါတယ်…");
     try {
-      const result = await importDirectTranscript(sourceUrl, language, (nextStage) => {
-        setStage(nextStage === "checking"
-          ? "YouTube link ကို စစ်နေပါတယ်…"
-          : nextStage === "captions"
-            ? "Creator / automatic caption tracks ကို အရင်ရှာနေပါတယ်…"
-            : "Caption မတွေ့လို့ Gemini direct-video fallback ကို အသုံးပြုနေပါတယ်…");
-      });
-      const document = importedToDocument(result);
-      await saveAndOpen(document);
+      const result = await importDirectTranscript(sourceUrl, language, (next) => setStage(next === "checking" ? "YouTube link ကို စစ်နေပါတယ်…" : next === "captions" ? "Caption tracks ကို AI မသုံးဘဲ ရှာနေပါတယ်…" : "Caption မရလို့ Gemini direct-video fallback ကိုသုံးနေပါတယ်…"));
+      await storeAndOpen(importedToDocument(result));
       setSourceUrl("");
-      setStatus({
-        tone: "success",
-        text: result.provider === "youtube"
-          ? "YouTube caption နဲ့ပြီးပါပြီ — cloud AI မသုံးပါ။"
-          : "Caption မရှိလို့ Gemini direct-video fallback နဲ့ transcript ထုတ်ပြီးပါပြီ။",
-      });
-      fireHaptic(Haptics.ImpactFeedbackStyle.Medium);
+      setStatus({ tone: "success", text: result.provider === "youtube" ? "YouTube caption နဲ့ပြီးပါပြီ — cloud AI မသုံးပါ။" : "Gemini fallback နဲ့ transcript ပြီးပါပြီ။" });
+      haptic(Haptics.ImpactFeedbackStyle.Medium);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Transcript မရပါ။";
-      setStatus({ tone: "error", text: message });
-      if ((error as Error & { code?: string })?.code === "AI_KEY_REQUIRED") setShowSettings(true);
-    } finally {
-      setBusy(false);
-      setStage("");
-    }
+      setStatus({ tone: "error", text: error instanceof Error ? error.message : "Transcript မရပါ။" });
+      if ((error as Error & { code?: string })?.code === "AI_KEY_REQUIRED") setSettings(true);
+    } finally { setBusy(false); setStage(""); }
   };
 
-  const handleFileImport = async () => {
-    setBusy(true);
-    setStatus(null);
-    setStage("File picker ဖွင့်နေပါတယ်…");
+  const importFile = async () => {
+    setBusy(true); setStatus(null); setStage("File picker ဖွင့်နေပါတယ်…");
     try {
       const file = await pickTranscriptFile();
-      const imported = await importMediaFile(file, {
-        mode: fileMode,
-        language,
-        onStage: (_nextStage, detail) => setStage(detail ?? "Processing file…"),
-      });
-      const document = importedToDocument(imported);
-      await saveAndOpen(document);
+      const result = await importMediaFile(file, { mode: fileMode, language, onStage: (_s, detail) => setStage(detail ?? "Processing…") });
+      const document = importedToDocument(result);
+      await storeAndOpen(document);
       setOfflineReady(isOfflineModelReady());
-      const provider = providerLabel(document.provider, document.source);
-      setStatus({ tone: "success", text: `${provider} နဲ့ transcript ပြီးပါပြီ။` });
-      fireHaptic(Haptics.ImpactFeedbackStyle.Medium);
+      setStatus({ tone: "success", text: `${providerLabel(document.provider, document.source)} နဲ့ transcript ပြီးပါပြီ။` });
+      haptic(Haptics.ImpactFeedbackStyle.Medium);
     } catch (error) {
       const message = error instanceof Error ? error.message : "File transcript မရပါ။";
       if (!/No file selected/iu.test(message)) setStatus({ tone: "error", text: message });
-    } finally {
-      setBusy(false);
-      setStage("");
-    }
+    } finally { setBusy(false); setStage(""); }
   };
 
-  const handleSaveProvider = async (provider: CloudProvider) => {
-    const value = providerDrafts[provider].trim();
-    if (!value) {
-      setStatus({ tone: "error", text: `${provider.toUpperCase()} API key ကို ထည့်ပါ။` });
-      return;
-    }
-    setSavingProvider(provider);
+  const saveKey = async (provider: CloudProvider) => {
+    const value = drafts[provider].trim();
+    if (!value) return setStatus({ tone: "error", text: `${provider.toUpperCase()} API key ကို ထည့်ပါ။` });
+    setSaving(provider);
     try {
       await saveProviderKey(provider, value);
-      setProviderDrafts((current) => ({ ...current, [provider]: "" }));
-      await refreshProviderState();
-      setStatus({ tone: "success", text: `${provider.toUpperCase()} key ကို Android SecureStore ထဲသိမ်းပြီးပါပြီ။ လိုအပ်မှသာသုံးပါမယ်။` });
-      fireHaptic();
-    } catch (error) {
-      setStatus({ tone: "error", text: error instanceof Error ? error.message : "Key save failed." });
-    } finally {
-      setSavingProvider(null);
-    }
+      setDrafts((old) => ({ ...old, [provider]: "" }));
+      await refreshEngine();
+      setStatus({ tone: "success", text: `${provider.toUpperCase()} key ကို SecureStore ထဲသိမ်းပြီးပါပြီ။ လိုမှသာသုံးပါမယ်။` });
+    } finally { setSaving(null); }
   };
 
-  const handleRemoveProvider = async (provider: CloudProvider) => {
+  const removeKey = async (provider: CloudProvider) => {
     await saveProviderKey(provider, "");
-    await refreshProviderState();
-    setStatus({ tone: "info", text: `${provider.toUpperCase()} key ကိုဖယ်ပြီးပါပြီ။` });
+    await refreshEngine();
+    setStatus({ tone: "info", text: `${provider.toUpperCase()} key ဖယ်ပြီးပါပြီ။` });
   };
 
-  const handleDownloadModel = async () => {
-    setModelBusy(true);
-    setStatus(null);
+  const downloadModel = async () => {
+    setModelBusy(true); setStatus(null);
     try {
-      await ensureOfflineModel((_stage, detail) => setStage(detail ?? "Offline model download…"));
+      await ensureOfflineModel((_s, detail) => setStage(detail ?? "Downloading offline model…"));
       setOfflineReady(true);
       setStatus({ tone: "success", text: "Offline multilingual Whisper model အဆင်သင့်ဖြစ်ပါပြီ။" });
     } catch (error) {
       setStatus({ tone: "error", text: error instanceof Error ? error.message : "Offline model download failed." });
-    } finally {
-      setModelBusy(false);
-      setStage("");
-    }
+    } finally { setModelBusy(false); setStage(""); }
   };
 
-  const handleRemoveModel = async () => {
+  const removeModel = async () => {
     await removeOfflineModel();
     setOfflineReady(false);
-    setStatus({ tone: "info", text: "Offline Whisper model ကို ဖုန်းထဲက ဖယ်ပြီးပါပြီ။" });
+    setStatus({ tone: "info", text: "Offline Whisper model ဖယ်ပြီးပါပြီ။" });
   };
 
-  const handlePasteManual = async () => {
-    const value = await Clipboard.getStringAsync();
-    if (!value.trim()) {
-      setStatus({ tone: "info", text: "Clipboard ထဲမှာ transcript text မတွေ့ပါ။" });
-      return;
-    }
-    setManualText(value);
+  const saveManual = async () => {
+    if (!manualText.trim()) return setStatus({ tone: "error", text: "Transcript text ကို အရင်ထည့်ပါ။" });
+    await storeAndOpen(textToDocument(manualText, manualTitle || "Manual transcript", "", language || "unknown"));
+    setManualText(""); setManualTitle(""); setManualOpen(false);
   };
 
-  const handleSaveManual = async () => {
-    if (!manualText.trim()) {
-      setStatus({ tone: "error", text: "Transcript text ကို အရင်ထည့်ပါ။" });
-      return;
-    }
-    const document = textToDocument(manualText, manualTitle || "Manual transcript", "", language || "unknown");
-    await saveAndOpen(document);
-    setManualText("");
-    setManualTitle("");
-    setManualOpen(false);
-    setStatus({ tone: "success", text: "Manual transcript ကို local device ထဲသိမ်းပြီးပါပြီ။" });
-  };
-
-  const handleUpdateDocument = (updated: TranscriptDocument) => {
-    setDocuments((current) => {
-      const next = current.map((item) => item.id === updated.id ? updated : item);
+  const updateDocument = (document: TranscriptDocument) => {
+    setDocuments((old) => {
+      const next = old.map((item) => item.id === document.id ? document : item);
       void persistDocuments(next);
       return next;
     });
   };
 
-  if (selectedDocument) {
-    return <Workspace document={selectedDocument} onBack={() => setSelectedId(null)} onUpdate={handleUpdateDocument} colors={colors} />;
-  }
+  if (selectedDocument) return <Workspace document={selectedDocument} colors={colors} onBack={() => setSelected(null)} onUpdate={updateDocument} />;
 
-  const configuredCount = Object.values(providerConfigured).filter(Boolean).length;
+  const providerCount = Object.values(configured).filter(Boolean).length;
 
   return (
     <ScreenContainer className="px-5" edges={["top", "left", "right"]}>
-      <FlatList
-        data={documents}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <TranscriptRow document={item} onOpen={() => setSelectedId(item.id)} colors={colors} />}
-        ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 32 }}
-        ListHeaderComponent={(
-          <View>
-            <View style={styles.topBar}>
-              <View style={styles.topBarCopy}>
-                <Text style={[styles.eyebrow, { color: colors.primary }]}>YOUTUBE TRANSCRIPT STUDIO · V1.2</Text>
-                <Text style={[styles.appTitle, { color: colors.foreground }]}>Local first. AI only when needed.</Text>
-              </View>
-              <TouchableOpacity onPress={() => setShowSettings(true)} style={[styles.settingsButton, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                <Text style={[styles.settingsButtonText, { color: colors.foreground }]}>⚙</Text>
-              </TouchableOpacity>
+      <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 28 }}>
+        <View style={styles.topBar}>
+          <View style={styles.topCopy}><Text style={[styles.kicker, { color: colors.primary }]}>TRANSCRIPT STUDIO · V1.2</Text><Text style={[styles.title, { color: colors.foreground }]}>Local first. AI only when needed.</Text></View>
+          <TouchableOpacity onPress={() => setSettings(true)} style={[styles.settingsButton, { backgroundColor: colors.surface, borderColor: colors.border }]}><Text style={[styles.settingsIcon, { color: colors.foreground }]}>⚙</Text></TouchableOpacity>
+        </View>
+
+        <View style={[styles.hero, { backgroundColor: colors.primary }]}>
+          <View style={styles.heroCircle} />
+          <Text style={styles.heroKicker}>SOURCE FIRST · LOCAL FIRST · CLOUD LAST</Text>
+          <Text style={styles.heroTitle}>Link, subtitle, audio, video — တစ်နေရာတည်း</Text>
+          <Text style={styles.heroText}>Caption/subtitle ရှိရင် AI မသုံးဘူး။ မရှိမှ offline speech model; local မရမှသာ သင်ဖွင့်ထားတဲ့ cloud provider ကို fallback လုပ်မယ်။</Text>
+        </View>
+
+        <View style={[styles.switch, { backgroundColor: colors.surface }]}>
+          <TouchableOpacity onPress={() => setHomeMode("youtube")} style={[styles.switchItem, homeMode === "youtube" && { backgroundColor: colors.background }]}><Text style={[styles.switchText, { color: homeMode === "youtube" ? colors.foreground : colors.muted }]}>YouTube Link</Text></TouchableOpacity>
+          <TouchableOpacity onPress={() => setHomeMode("file")} style={[styles.switchItem, homeMode === "file" && { backgroundColor: colors.background }]}><Text style={[styles.switchText, { color: homeMode === "file" ? colors.foreground : colors.muted }]}>Audio / Video / Subtitle</Text></TouchableOpacity>
+        </View>
+
+        {homeMode === "youtube" ? (
+          <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.cardTitle, { color: colors.foreground }]}>YouTube video</Text>
+            <TextInput value={sourceUrl} onChangeText={setSourceUrl} placeholder="https://youtu.be/..." placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} keyboardType="url" style={[styles.input, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }]} />
+            <View style={styles.inputRow}>
+              <TextInput value={language} onChangeText={setLanguage} placeholder="Language hint (optional)" placeholderTextColor={colors.muted} autoCapitalize="none" style={[styles.input, styles.flexInput, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }]} />
+              <TouchableOpacity onPress={pasteLink} style={[styles.paste, { backgroundColor: colors.primary + "16" }]}><Text style={[styles.pasteText, { color: colors.primary }]}>Paste link</Text></TouchableOpacity>
             </View>
-
-            <View style={[styles.heroCard, { backgroundColor: colors.primary }]}>
-              <View style={styles.heroOrbLarge} />
-              <View style={styles.heroOrbSmall} />
-              <Text style={styles.heroKicker}>SOURCE FIRST · LOCAL FIRST · CLOUD LAST</Text>
-              <Text style={styles.heroTitle}>Link, subtitle, audio, video — တစ်နေရာတည်း</Text>
-              <Text style={styles.heroBody}>Caption/subtitle ရှိရင် AI မသုံးဘူး။ မရှိမှ offline Whisper ကိုသုံးပြီး၊ local မရမှသာ သင်ဖွင့်ထားတဲ့ cloud provider ကို fallback လုပ်မယ်။</Text>
-            </View>
-
-            <View style={[styles.homeModeSwitch, { backgroundColor: colors.surface }]}>
-              <TouchableOpacity onPress={() => setHomeMode("youtube")} style={[styles.homeModeOption, homeMode === "youtube" && { backgroundColor: colors.background }]}>
-                <Text style={[styles.homeModeText, { color: homeMode === "youtube" ? colors.foreground : colors.muted }]}>YouTube Link</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => setHomeMode("file")} style={[styles.homeModeOption, homeMode === "file" && { backgroundColor: colors.background }]}>
-                <Text style={[styles.homeModeText, { color: homeMode === "file" ? colors.foreground : colors.muted }]}>Audio / Video / Subtitle</Text>
-              </TouchableOpacity>
-            </View>
-
-            {homeMode === "youtube" ? (
-              <View style={[styles.inputCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                <Text style={[styles.inputLabel, { color: colors.foreground }]}>YouTube video</Text>
-                <TextInput
-                  value={sourceUrl}
-                  onChangeText={setSourceUrl}
-                  placeholder="https://youtu.be/... or youtube.com/watch?v=..."
-                  placeholderTextColor={colors.muted}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="url"
-                  style={[styles.singleInput, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }]}
-                />
-                <View style={styles.compactRow}>
-                  <TextInput
-                    value={language}
-                    onChangeText={setLanguage}
-                    placeholder="Language hint (optional)"
-                    placeholderTextColor={colors.muted}
-                    autoCapitalize="none"
-                    style={[styles.singleInput, styles.languageInput, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }]}
-                  />
-                  <TouchableOpacity onPress={handlePasteLink} style={[styles.pasteLinkButton, { backgroundColor: colors.primary + "16" }]}>
-                    <Text style={[styles.pasteLinkText, { color: colors.primary }]}>Paste link</Text>
-                  </TouchableOpacity>
-                </View>
-                <TouchableOpacity onPress={handleYouTubeImport} disabled={busy} style={[styles.primaryButton, { backgroundColor: colors.primary }, busy && styles.disabledButton]}>
-                  {busy ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.primaryButtonText}>Get Transcript</Text>}
-                  {!busy && <Text style={styles.primaryButtonArrow}>→</Text>}
-                </TouchableOpacity>
-                <Text style={[styles.inputFootnote, { color: colors.muted }]}>YouTube captions → Gemini direct URL only if captions fail and Gemini is configured.</Text>
-              </View>
-            ) : (
-              <View style={[styles.inputCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                <Text style={[styles.inputLabel, { color: colors.foreground }]}>File processing mode</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.fileModeRow}>
-                  {FILE_MODES.map((item) => {
-                    const active = fileMode === item.id;
-                    return (
-                      <TouchableOpacity
-                        key={item.id}
-                        onPress={() => setFileMode(item.id)}
-                        style={[styles.fileModeChip, { borderColor: active ? colors.primary : colors.border, backgroundColor: active ? colors.primary + "12" : colors.background }]}
-                      >
-                        <Text style={[styles.fileModeTitle, { color: active ? colors.primary : colors.foreground }]}>{item.title}</Text>
-                        <Text style={[styles.fileModeSubtitle, { color: colors.muted }]}>{item.subtitle}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-                <TextInput
-                  value={language}
-                  onChangeText={setLanguage}
-                  placeholder="Language hint: my, en, th… (optional)"
-                  placeholderTextColor={colors.muted}
-                  autoCapitalize="none"
-                  style={[styles.singleInput, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }]}
-                />
-                <TouchableOpacity onPress={handleFileImport} disabled={busy} style={[styles.primaryButton, { backgroundColor: colors.primary }, busy && styles.disabledButton]}>
-                  {busy ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.primaryButtonText}>Choose File & Transcribe</Text>}
-                  {!busy && <Text style={styles.primaryButtonArrow}>→</Text>}
-                </TouchableOpacity>
-                <Text style={[styles.inputFootnote, { color: colors.muted }]}>SRT · VTT · ASS · TXT · MP3 · M4A · WAV · MP4 · MKV · WebM and other common media.</Text>
-              </View>
-            )}
-
-            {(busy || modelBusy) && stage ? <Text style={[styles.progressText, { color: colors.muted }]}>{stage}</Text> : null}
-
-            <TouchableOpacity onPress={() => setShowSettings(true)} activeOpacity={0.78} style={[styles.engineCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-              <View style={[styles.engineIcon, { backgroundColor: offlineReady ? colors.success + "18" : colors.primary + "14" }]}>
-                <Text style={{ color: offlineReady ? colors.success : colors.primary, fontWeight: "900" }}>{offlineReady ? "✓" : "AI"}</Text>
-              </View>
-              <View style={styles.engineCopy}>
-                <Text style={[styles.engineTitle, { color: colors.foreground }]}>Transcription Engine</Text>
-                <Text style={[styles.engineSubtitle, { color: colors.muted }]}>{offlineReady ? "Offline Whisper ready" : "Offline model downloads only when needed"} · {configuredCount} cloud provider{configuredCount === 1 ? "" : "s"} configured</Text>
-              </View>
-              <Text style={[styles.rowChevron, { color: colors.muted }]}>›</Text>
-            </TouchableOpacity>
-
-            <StatusCard status={status} colors={colors} />
-
-            <TouchableOpacity onPress={() => setManualOpen((value) => !value)} style={styles.manualToggle}>
-              <Text style={[styles.manualToggleText, { color: colors.primary }]}>{manualOpen ? "Hide manual paste" : "Manual paste fallback"}</Text>
-              <Text style={[styles.manualToggleArrow, { color: colors.primary }]}>{manualOpen ? "−" : "+"}</Text>
-            </TouchableOpacity>
-
-            {manualOpen && (
-              <View style={[styles.manualCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-                <TextInput value={manualTitle} onChangeText={setManualTitle} placeholder="Document title (optional)" placeholderTextColor={colors.muted} style={[styles.singleInput, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }]} />
-                <View style={[styles.manualTextWrap, { borderColor: colors.border, backgroundColor: colors.background }]}>
-                  <TextInput value={manualText} onChangeText={setManualText} placeholder="Paste transcript text here..." placeholderTextColor={colors.muted} multiline textAlignVertical="top" style={[styles.manualTextInput, { color: colors.foreground }]} />
-                  <TouchableOpacity onPress={handlePasteManual} style={[styles.smallButton, { backgroundColor: colors.primary + "14" }]}>
-                    <Text style={[styles.smallButtonText, { color: colors.primary }]}>Paste clipboard</Text>
-                  </TouchableOpacity>
-                </View>
-                <TouchableOpacity onPress={handleSaveManual} style={[styles.secondaryFullButton, { borderColor: colors.border }]}>
-                  <Text style={[styles.secondaryFullButtonText, { color: colors.foreground }]}>Save manual transcript</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            <View style={styles.sectionHeading}>
-              <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Recent transcripts</Text>
-              <Text style={[styles.sectionSubtitle, { color: colors.muted }]}>Stored locally on this device</Text>
-            </View>
+            <TouchableOpacity onPress={importYouTube} disabled={busy} style={[styles.bigButton, { backgroundColor: colors.primary }, busy && styles.disabled]}>{busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.bigButtonText}>Get Transcript →</Text>}</TouchableOpacity>
+            <Text style={[styles.footnote, { color: colors.muted }]}>YouTube captions first. Gemini direct URL is used only when captions fail and a Gemini key exists.</Text>
           </View>
-        )}
-        ListEmptyComponent={(
-          <View style={[styles.emptyCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-            <Text style={[styles.emptyTitle, { color: colors.foreground }]}>No transcripts yet</Text>
-            <Text style={[styles.emptyBody, { color: colors.muted }]}>YouTube link သို့မဟုတ် audio/video/subtitle file တစ်ခုရွေးပြီး စတင်ပါ။</Text>
-          </View>
-        )}
-      />
-
-      <Modal visible={showSettings} transparent animationType="slide" onRequestClose={() => setShowSettings(false)}>
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.settingsSheet, { backgroundColor: colors.background, paddingBottom: Math.max(insets.bottom, 18) + 14 }]}>
-            <View style={styles.sheetHandle} />
-            <View style={styles.sheetHeader}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.sheetEyebrow, { color: colors.primary }]}>LOCAL-FIRST ENGINE</Text>
-                <Text style={[styles.sheetTitle, { color: colors.foreground }]}>Offline & Cloud Providers</Text>
-              </View>
-              <TouchableOpacity onPress={() => setShowSettings(false)} style={styles.closeButton}>
-                <Text style={[styles.closeButtonText, { color: colors.muted }]}>×</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.settingsScroll} keyboardShouldPersistTaps="handled">
-              <View style={[styles.offlineCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-                <View style={styles.providerHeader}>
-                  <View style={[styles.providerDot, { backgroundColor: offlineReady ? colors.success : colors.muted }]} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.providerTitle, { color: colors.foreground }]}>Offline Whisper · multilingual</Text>
-                    <Text style={[styles.providerSubtitle, { color: colors.muted }]}>{offlineReady ? "Installed · media stays on this phone" : "~60 MB one-time model download · no API key"}</Text>
-                  </View>
-                </View>
-                <TouchableOpacity
-                  onPress={offlineReady ? handleRemoveModel : handleDownloadModel}
-                  disabled={modelBusy}
-                  style={[styles.providerButton, { borderColor: offlineReady ? colors.error + "55" : colors.primary, backgroundColor: offlineReady ? colors.error + "0D" : colors.primary + "10" }]}
-                >
-                  {modelBusy ? <ActivityIndicator color={colors.primary} /> : <Text style={[styles.providerButtonText, { color: offlineReady ? colors.error : colors.primary }]}>{offlineReady ? "Remove offline model" : "Download offline model"}</Text>}
-                </TouchableOpacity>
-              </View>
-
-              <Text style={[styles.settingsHint, { color: colors.muted }]}>Cloud keys are optional. They are stored in Android SecureStore and only used by modes that allow cloud fallback. A shared key is never baked into the APK.</Text>
-
-              {PROVIDERS.map((provider) => {
-                const configured = providerConfigured[provider.id];
-                return (
-                  <View key={provider.id} style={[styles.providerCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
-                    <View style={styles.providerHeader}>
-                      <View style={[styles.providerDot, { backgroundColor: configured ? colors.success : colors.muted }]} />
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.providerTitle, { color: colors.foreground }]}>{provider.title}</Text>
-                        <Text style={[styles.providerSubtitle, { color: colors.muted }]}>{configured ? "Configured securely" : provider.subtitle}</Text>
-                      </View>
-                    </View>
-                    <TextInput
-                      value={providerDrafts[provider.id]}
-                      onChangeText={(value) => setProviderDrafts((current) => ({ ...current, [provider.id]: value }))}
-                      placeholder={configured ? "Enter a new key to replace it" : "Paste API key"}
-                      placeholderTextColor={colors.muted}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      secureTextEntry
-                      style={[styles.keyInput, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }]}
-                    />
-                    <View style={styles.providerActions}>
-                      <TouchableOpacity onPress={() => handleSaveProvider(provider.id)} disabled={savingProvider !== null} style={[styles.providerPrimary, { backgroundColor: colors.primary }]}>
-                        {savingProvider === provider.id ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.providerPrimaryText}>{configured ? "Replace key" : "Save key"}</Text>}
-                      </TouchableOpacity>
-                      {configured && (
-                        <TouchableOpacity onPress={() => handleRemoveProvider(provider.id)} disabled={savingProvider !== null} style={[styles.providerRemove, { borderColor: colors.border }]}>
-                          <Text style={[styles.providerRemoveText, { color: colors.error }]}>Remove</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  </View>
-                );
+        ) : (
+          <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.cardTitle, { color: colors.foreground }]}>File processing mode</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.modeRow}>
+              {FILE_MODES.map((item) => {
+                const active = fileMode === item.id;
+                return <TouchableOpacity key={item.id} onPress={() => setFileMode(item.id)} style={[styles.modeChip, { backgroundColor: active ? colors.primary + "12" : colors.background, borderColor: active ? colors.primary : colors.border }]}><Text style={[styles.modeTitle, { color: active ? colors.primary : colors.foreground }]}>{item.title}</Text><Text style={[styles.modeNote, { color: colors.muted }]}>{item.note}</Text></TouchableOpacity>;
               })}
+            </ScrollView>
+            <TextInput value={language} onChangeText={setLanguage} placeholder="Language hint: my, en, th… (optional)" placeholderTextColor={colors.muted} autoCapitalize="none" style={[styles.input, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }]} />
+            <TouchableOpacity onPress={importFile} disabled={busy} style={[styles.bigButton, { backgroundColor: colors.primary }, busy && styles.disabled]}>{busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.bigButtonText}>Choose File & Transcribe →</Text>}</TouchableOpacity>
+            <Text style={[styles.footnote, { color: colors.muted }]}>SRT · VTT · ASS · TXT · MP3 · M4A · WAV · MP4 · MKV · WebM and common media.</Text>
+          </View>
+        )}
+
+        {(busy || modelBusy) && !!stage && <Text style={[styles.progress, { color: colors.muted }]}>{stage}</Text>}
+
+        <TouchableOpacity onPress={() => setSettings(true)} style={[styles.engine, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <View style={[styles.engineMark, { backgroundColor: offlineReady ? colors.success + "18" : colors.primary + "14" }]}><Text style={{ color: offlineReady ? colors.success : colors.primary, fontWeight: "900" }}>{offlineReady ? "✓" : "AI"}</Text></View>
+          <View style={styles.engineBody}><Text style={[styles.engineTitle, { color: colors.foreground }]}>Transcription Engine</Text><Text style={[styles.engineNote, { color: colors.muted }]}>{offlineReady ? "Offline Whisper ready" : "Offline model installs only when needed"} · {providerCount} cloud provider{providerCount === 1 ? "" : "s"}</Text></View><Text style={[styles.chevron, { color: colors.muted }]}>›</Text>
+        </TouchableOpacity>
+
+        <StatusCard status={status} colors={colors} />
+
+        <TouchableOpacity onPress={() => setManualOpen((value) => !value)} style={styles.manualToggle}><Text style={[styles.manualText, { color: colors.primary }]}>{manualOpen ? "Hide manual paste" : "Manual paste fallback"}</Text><Text style={[styles.manualPlus, { color: colors.primary }]}>{manualOpen ? "−" : "+"}</Text></TouchableOpacity>
+        {manualOpen && <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}><TextInput value={manualTitle} onChangeText={setManualTitle} placeholder="Document title" placeholderTextColor={colors.muted} style={[styles.input, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }]} /><TextInput value={manualText} onChangeText={setManualText} multiline textAlignVertical="top" placeholder="Paste transcript text…" placeholderTextColor={colors.muted} style={[styles.manualInput, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }]} /><View style={styles.actionRow}><TouchableOpacity onPress={async () => setManualText(await Clipboard.getStringAsync())} style={[styles.secondary, { borderColor: colors.border }]}><Text style={[styles.secondaryText, { color: colors.foreground }]}>Paste</Text></TouchableOpacity><TouchableOpacity onPress={saveManual} style={[styles.primary, { backgroundColor: colors.primary }]}><Text style={styles.primaryText}>Save transcript</Text></TouchableOpacity></View></View>}
+
+        <View style={styles.section}><Text style={[styles.sectionTitle, { color: colors.foreground }]}>Recent transcripts</Text><Text style={[styles.sectionNote, { color: colors.muted }]}>Stored locally on this device</Text></View>
+        {documents.length ? documents.map((item) => <View key={item.id} style={{ marginBottom: 10 }}><TranscriptRow item={item} onPress={() => setSelected(item.id)} colors={colors} /></View>) : <View style={[styles.empty, { backgroundColor: colors.surface, borderColor: colors.border }]}><Text style={[styles.emptyTitle, { color: colors.foreground }]}>No transcripts yet</Text><Text style={[styles.emptyText, { color: colors.muted }]}>YouTube link သို့မဟုတ် audio/video/subtitle file တစ်ခုနဲ့ စတင်ပါ။</Text></View>}
+      </ScrollView>
+
+      <Modal visible={settings} transparent animationType="slide" onRequestClose={() => setSettings(false)}>
+        <View style={styles.backdrop}>
+          <View style={[styles.settingsSheet, { backgroundColor: colors.background, paddingBottom: Math.max(insets.bottom, 16) + 12 }]}>
+            <View style={styles.handle} />
+            <View style={styles.sheetTop}><View style={{ flex: 1 }}><Text style={[styles.kicker, { color: colors.primary }]}>LOCAL-FIRST ENGINE</Text><Text style={[styles.sheetTitle, { color: colors.foreground }]}>Offline & Cloud Providers</Text></View><TouchableOpacity onPress={() => setSettings(false)}><Text style={[styles.close, { color: colors.muted }]}>×</Text></TouchableOpacity></View>
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.settingsScroll}>
+              <View style={[styles.providerCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <View style={styles.providerTop}><View style={[styles.dot, { backgroundColor: offlineReady ? colors.success : colors.muted }]} /><View style={{ flex: 1 }}><Text style={[styles.providerTitle, { color: colors.foreground }]}>Offline Whisper · Multilingual</Text><Text style={[styles.providerNote, { color: colors.muted }]}>{offlineReady ? "Installed · media stays on this phone" : "~60 MB one-time model · no API key"}</Text></View></View>
+                <TouchableOpacity onPress={offlineReady ? removeModel : downloadModel} disabled={modelBusy} style={[styles.outlineButton, { borderColor: offlineReady ? colors.error : colors.primary }]}>{modelBusy ? <ActivityIndicator color={colors.primary} /> : <Text style={[styles.outlineText, { color: offlineReady ? colors.error : colors.primary }]}>{offlineReady ? "Remove offline model" : "Download offline model"}</Text>}</TouchableOpacity>
+              </View>
+
+              <Text style={[styles.settingsHint, { color: colors.muted }]}>Cloud keys are optional. Keys are stored in Android SecureStore; no shared secret is embedded in the APK.</Text>
+
+              {PROVIDERS.map((provider) => <View key={provider.id} style={[styles.providerCard, { backgroundColor: colors.surface, borderColor: colors.border }]}><View style={styles.providerTop}><View style={[styles.dot, { backgroundColor: configured[provider.id] ? colors.success : colors.muted }]} /><View style={{ flex: 1 }}><Text style={[styles.providerTitle, { color: colors.foreground }]}>{provider.title}</Text><Text style={[styles.providerNote, { color: colors.muted }]}>{configured[provider.id] ? "Configured securely" : provider.note}</Text></View></View><TextInput value={drafts[provider.id]} onChangeText={(value) => setDrafts((old) => ({ ...old, [provider.id]: value }))} placeholder={configured[provider.id] ? "Enter new key to replace" : "Paste API key"} placeholderTextColor={colors.muted} autoCapitalize="none" autoCorrect={false} secureTextEntry style={[styles.input, { color: colors.foreground, borderColor: colors.border, backgroundColor: colors.background }]} /><View style={styles.actionRow}><TouchableOpacity onPress={() => saveKey(provider.id)} disabled={saving !== null} style={[styles.primary, { backgroundColor: colors.primary }]}>{saving === provider.id ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>{configured[provider.id] ? "Replace key" : "Save key"}</Text>}</TouchableOpacity>{configured[provider.id] && <TouchableOpacity onPress={() => removeKey(provider.id)} style={[styles.secondary, { borderColor: colors.border }]}><Text style={[styles.secondaryText, { color: colors.error }]}>Remove</Text></TouchableOpacity>}</View></View>)}
             </ScrollView>
           </View>
         </View>
@@ -778,141 +465,111 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  topBar: { paddingTop: 4, paddingBottom: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  topBarCopy: { flex: 1, paddingRight: 12 },
-  eyebrow: { fontSize: 9, fontWeight: "900", letterSpacing: 1.35, marginBottom: 5 },
-  appTitle: { fontSize: 22, lineHeight: 28, fontWeight: "800", letterSpacing: -0.45 },
-  settingsButton: { width: 44, height: 44, borderRadius: 15, alignItems: "center", justifyContent: "center", borderWidth: 1 },
-  settingsButtonText: { fontSize: 19, fontWeight: "900" },
-  heroCard: { minHeight: 200, borderRadius: 28, padding: 22, overflow: "hidden", justifyContent: "flex-end", marginBottom: 14 },
-  heroOrbLarge: { position: "absolute", width: 220, height: 220, borderRadius: 110, right: -72, top: -76, backgroundColor: "#FFFFFF18" },
-  heroOrbSmall: { position: "absolute", width: 94, height: 94, borderRadius: 47, right: 30, top: 42, backgroundColor: "#FFFFFF10" },
-  heroKicker: { color: "#DCEBFF", fontSize: 9, fontWeight: "900", letterSpacing: 1.2, marginBottom: 8 },
-  heroTitle: { color: "#FFFFFF", fontSize: 25, fontWeight: "850", lineHeight: 32, maxWidth: 320, marginBottom: 8 },
-  heroBody: { color: "#EAF2FF", fontSize: 12, lineHeight: 19, maxWidth: 350 },
-  homeModeSwitch: { flexDirection: "row", borderRadius: 15, padding: 4, marginBottom: 12 },
-  homeModeOption: { flex: 1, minHeight: 43, alignItems: "center", justifyContent: "center", borderRadius: 12, paddingHorizontal: 6 },
-  homeModeText: { fontSize: 11, fontWeight: "850", textAlign: "center" },
-  inputCard: { borderWidth: 1, borderRadius: 22, padding: 16, marginBottom: 10 },
-  inputLabel: { fontSize: 14, fontWeight: "850", marginBottom: 10 },
-  singleInput: { minHeight: 48, borderWidth: 1, borderRadius: 13, paddingHorizontal: 13, fontSize: 13, marginBottom: 9 },
-  compactRow: { flexDirection: "row", gap: 8, alignItems: "flex-start" },
-  languageInput: { flex: 1 },
-  pasteLinkButton: { minHeight: 48, borderRadius: 13, paddingHorizontal: 14, alignItems: "center", justifyContent: "center" },
-  pasteLinkText: { fontSize: 12, fontWeight: "850" },
-  primaryButton: { minHeight: 52, borderRadius: 14, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 },
-  primaryButtonText: { color: "#FFFFFF", fontSize: 15, fontWeight: "850" },
-  primaryButtonArrow: { color: "#FFFFFF", fontSize: 20, lineHeight: 20 },
-  disabledButton: { opacity: 0.62 },
-  inputFootnote: { marginTop: 9, fontSize: 10, lineHeight: 16, fontWeight: "600" },
-  fileModeRow: { gap: 8, paddingBottom: 11 },
-  fileModeChip: { width: 174, minHeight: 78, borderWidth: 1, borderRadius: 14, padding: 11 },
-  fileModeTitle: { fontSize: 12, fontWeight: "850", marginBottom: 4 },
-  fileModeSubtitle: { fontSize: 9, lineHeight: 14, fontWeight: "600" },
-  progressText: { marginBottom: 10, fontSize: 11, lineHeight: 17, fontWeight: "650", textAlign: "center" },
-  engineCard: { borderWidth: 1, borderRadius: 18, padding: 13, flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 11 },
-  engineIcon: { width: 44, height: 44, borderRadius: 14, alignItems: "center", justifyContent: "center" },
-  engineCopy: { flex: 1 },
-  engineTitle: { fontSize: 14, fontWeight: "850" },
-  engineSubtitle: { fontSize: 10, lineHeight: 15, marginTop: 3 },
-  statusCard: { flexDirection: "row", alignItems: "center", borderRadius: 14, padding: 12, gap: 10, marginBottom: 10 },
-  statusIcon: { width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center" },
-  statusIconText: { color: "#FFFFFF", fontSize: 13, fontWeight: "900" },
-  statusText: { flex: 1, fontSize: 11, lineHeight: 18, fontWeight: "650" },
-  manualToggle: { minHeight: 42, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4, marginBottom: 6 },
-  manualToggleText: { fontSize: 12, fontWeight: "850" },
-  manualToggleArrow: { fontSize: 20, fontWeight: "700" },
-  manualCard: { borderWidth: 1, borderRadius: 18, padding: 13, marginBottom: 12 },
-  manualTextWrap: { minHeight: 150, borderWidth: 1, borderRadius: 13, padding: 4, marginBottom: 10 },
-  manualTextInput: { flex: 1, minHeight: 100, padding: 10, fontSize: 14, lineHeight: 21 },
-  smallButton: { alignSelf: "flex-end", borderRadius: 9, paddingHorizontal: 10, paddingVertical: 7, marginRight: 5, marginBottom: 5 },
-  smallButtonText: { fontSize: 11, fontWeight: "850" },
-  secondaryFullButton: { minHeight: 46, borderWidth: 1, borderRadius: 13, alignItems: "center", justifyContent: "center" },
-  secondaryFullButtonText: { fontSize: 13, fontWeight: "850" },
-  sectionHeading: { paddingTop: 8, paddingBottom: 9 },
-  sectionTitle: { fontSize: 18, fontWeight: "850", letterSpacing: -0.2 },
-  sectionSubtitle: { fontSize: 11, marginTop: 3 },
-  emptyCard: { borderWidth: 1, borderRadius: 20, padding: 20, alignItems: "center", marginTop: 4 },
-  emptyTitle: { fontSize: 16, fontWeight: "850", marginBottom: 5 },
-  emptyBody: { fontSize: 11, lineHeight: 18, textAlign: "center", maxWidth: 280 },
-  transcriptRow: { minHeight: 82, borderWidth: 1, borderRadius: 18, padding: 13, flexDirection: "row", alignItems: "center", gap: 12 },
-  rowIcon: { width: 44, height: 44, borderRadius: 14, alignItems: "center", justifyContent: "center" },
-  rowIconText: { fontSize: 19, fontWeight: "900" },
-  rowContent: { flex: 1, minWidth: 0 },
-  rowTitle: { fontSize: 14, lineHeight: 19, fontWeight: "750" },
-  rowMeta: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 7 },
-  rowMetaText: { fontSize: 9, fontWeight: "650" },
-  metaSeparator: { width: 3, height: 3, borderRadius: 2 },
-  rowChevron: { fontSize: 26, lineHeight: 26 },
-  workspaceShell: { flex: 1 },
-  workspaceHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingTop: 3, paddingBottom: 13 },
-  backButton: { flexDirection: "row", alignItems: "center", paddingVertical: 5, paddingRight: 10 },
-  backButtonText: { fontSize: 30, lineHeight: 26, marginRight: 5 },
-  backButtonLabel: { fontSize: 13, fontWeight: "850" },
-  headerExport: { borderRadius: 10, paddingHorizontal: 11, paddingVertical: 8 },
-  headerExportText: { fontSize: 11, fontWeight: "900", letterSpacing: 0.7 },
-  workspaceTitleBlock: { paddingBottom: 12 },
-  workspaceEyebrow: { fontSize: 9, fontWeight: "900", letterSpacing: 1.35, marginBottom: 6 },
-  workspaceTitle: { fontSize: 22, fontWeight: "850", lineHeight: 28, letterSpacing: -0.35 },
-  workspaceMetaLine: { flexDirection: "row", alignItems: "center", gap: 9, marginTop: 9, flexWrap: "wrap" },
-  workspaceLanguage: { fontSize: 10, fontWeight: "850" },
-  sourceBadge: { flexDirection: "row", alignItems: "center", borderRadius: 100, paddingHorizontal: 8, paddingVertical: 4, gap: 5 },
-  sourceDot: { width: 6, height: 6, borderRadius: 3 },
-  sourceBadgeText: { fontSize: 9, fontWeight: "850" },
-  searchWrap: { minHeight: 44, borderWidth: 1, borderRadius: 13, paddingHorizontal: 11, flexDirection: "row", alignItems: "center", marginBottom: 10 },
-  searchMark: { fontSize: 20, width: 23, textAlign: "center" },
-  searchInput: { flex: 1, minHeight: 40, paddingHorizontal: 7, fontSize: 12 },
-  clearSearch: { fontSize: 22, paddingHorizontal: 4, lineHeight: 22 },
-  modeSwitch: { flexDirection: "row", borderRadius: 12, padding: 3, marginBottom: 10 },
-  modeOption: { flex: 1, minHeight: 36, alignItems: "center", justifyContent: "center", borderRadius: 9 },
-  modeOptionText: { fontSize: 12, fontWeight: "850" },
-  transcriptPanel: { flex: 1, borderWidth: 1, borderRadius: 18, overflow: "hidden", minHeight: 240 },
-  segmentList: { paddingHorizontal: 15, paddingVertical: 14, paddingBottom: 30 },
-  segmentRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, paddingVertical: 8 },
-  segmentTime: { width: 48, fontSize: 9, fontWeight: "850", paddingTop: 3 },
+  topBar: { flexDirection: "row", alignItems: "center", paddingTop: 4, paddingBottom: 16 },
+  topCopy: { flex: 1, paddingRight: 12 },
+  kicker: { fontSize: 9, fontWeight: "900", letterSpacing: 1.35, marginBottom: 5 },
+  title: { fontSize: 22, lineHeight: 28, fontWeight: "800", letterSpacing: -0.4 },
+  settingsButton: { width: 44, height: 44, borderRadius: 15, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  settingsIcon: { fontSize: 19, fontWeight: "900" },
+  hero: { minHeight: 195, borderRadius: 28, padding: 22, justifyContent: "flex-end", overflow: "hidden", marginBottom: 14 },
+  heroCircle: { position: "absolute", width: 220, height: 220, borderRadius: 110, right: -70, top: -80, backgroundColor: "#FFFFFF18" },
+  heroKicker: { color: "#DCEBFF", fontSize: 9, fontWeight: "900", letterSpacing: 1.15, marginBottom: 8 },
+  heroTitle: { color: "#FFFFFF", fontSize: 25, lineHeight: 32, fontWeight: "800", marginBottom: 8, maxWidth: 330 },
+  heroText: { color: "#EAF2FF", fontSize: 12, lineHeight: 19, maxWidth: 350 },
+  switch: { flexDirection: "row", borderRadius: 14, padding: 4, marginBottom: 12 },
+  switchItem: { flex: 1, minHeight: 42, borderRadius: 11, alignItems: "center", justifyContent: "center", paddingHorizontal: 6 },
+  switchText: { fontSize: 11, fontWeight: "800", textTransform: "capitalize", textAlign: "center" },
+  card: { borderWidth: 1, borderRadius: 21, padding: 15, marginBottom: 10 },
+  cardTitle: { fontSize: 14, fontWeight: "800", marginBottom: 10 },
+  input: { minHeight: 48, borderWidth: 1, borderRadius: 13, paddingHorizontal: 12, fontSize: 12, marginBottom: 9 },
+  inputRow: { flexDirection: "row", gap: 8 },
+  flexInput: { flex: 1 },
+  paste: { minHeight: 48, borderRadius: 13, paddingHorizontal: 14, alignItems: "center", justifyContent: "center" },
+  pasteText: { fontSize: 11, fontWeight: "800" },
+  bigButton: { minHeight: 51, borderRadius: 14, alignItems: "center", justifyContent: "center", paddingHorizontal: 14 },
+  bigButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "800" },
+  disabled: { opacity: 0.6 },
+  footnote: { fontSize: 9, lineHeight: 15, marginTop: 9, fontWeight: "600" },
+  modeRow: { gap: 8, paddingBottom: 10 },
+  modeChip: { width: 172, minHeight: 74, borderWidth: 1, borderRadius: 14, padding: 10 },
+  modeTitle: { fontSize: 11, fontWeight: "800", marginBottom: 4 },
+  modeNote: { fontSize: 9, lineHeight: 14, fontWeight: "600" },
+  progress: { fontSize: 10, lineHeight: 16, textAlign: "center", marginBottom: 10, fontWeight: "600" },
+  engine: { borderWidth: 1, borderRadius: 18, padding: 12, flexDirection: "row", alignItems: "center", gap: 11, marginBottom: 10 },
+  engineMark: { width: 42, height: 42, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  engineBody: { flex: 1 },
+  engineTitle: { fontSize: 13, fontWeight: "800" },
+  engineNote: { fontSize: 9, lineHeight: 14, marginTop: 3 },
+  status: { flexDirection: "row", gap: 9, alignItems: "center", padding: 11, borderRadius: 14, marginBottom: 9 },
+  statusMark: { width: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  statusMarkText: { color: "#FFFFFF", fontSize: 12, fontWeight: "900" },
+  statusText: { flex: 1, fontSize: 10, lineHeight: 17, fontWeight: "600" },
+  manualToggle: { minHeight: 42, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 4 },
+  manualText: { fontSize: 11, fontWeight: "800" },
+  manualPlus: { fontSize: 20, fontWeight: "700" },
+  manualInput: { minHeight: 150, borderWidth: 1, borderRadius: 13, padding: 12, fontSize: 13, lineHeight: 21, marginBottom: 9 },
+  section: { paddingTop: 10, paddingBottom: 9 },
+  sectionTitle: { fontSize: 18, fontWeight: "800" },
+  sectionNote: { fontSize: 10, marginTop: 3 },
+  empty: { borderWidth: 1, borderRadius: 18, padding: 20, alignItems: "center" },
+  emptyTitle: { fontSize: 15, fontWeight: "800", marginBottom: 5 },
+  emptyText: { fontSize: 10, lineHeight: 17, textAlign: "center" },
+  row: { minHeight: 78, borderWidth: 1, borderRadius: 17, padding: 12, flexDirection: "row", alignItems: "center", gap: 11 },
+  rowIcon: { width: 42, height: 42, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+  rowIconText: { fontSize: 18, fontWeight: "900" },
+  rowBody: { flex: 1 },
+  rowTitle: { fontSize: 13, lineHeight: 18, fontWeight: "700" },
+  rowMeta: { fontSize: 9, marginTop: 5, fontWeight: "600" },
+  chevron: { fontSize: 25 },
+  badge: { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 99, paddingHorizontal: 8, paddingVertical: 4 },
+  badgeText: { fontSize: 9, fontWeight: "800" },
+  dot: { width: 8, height: 8, borderRadius: 4 },
+  workspace: { flex: 1 },
+  workspaceTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingTop: 3, paddingBottom: 12 },
+  back: { paddingVertical: 6, paddingRight: 10 },
+  backText: { fontSize: 13, fontWeight: "800" },
+  docxButton: { paddingHorizontal: 11, paddingVertical: 8, borderRadius: 10 },
+  docxText: { fontSize: 10, fontWeight: "900" },
+  workspaceTitle: { fontSize: 22, lineHeight: 28, fontWeight: "800", letterSpacing: -0.35 },
+  metaLine: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap", paddingTop: 8, paddingBottom: 11 },
+  metaText: { fontSize: 10, fontWeight: "800" },
+  search: { minHeight: 43, borderWidth: 1, borderRadius: 13, flexDirection: "row", alignItems: "center", paddingHorizontal: 10, marginBottom: 9 },
+  searchInput: { flex: 1, minHeight: 40, fontSize: 12 },
+  clear: { fontSize: 22, paddingHorizontal: 4 },
+  panel: { flex: 1, minHeight: 230, borderWidth: 1, borderRadius: 17, overflow: "hidden" },
+  segmentList: { padding: 14, paddingBottom: 26 },
+  segmentRow: { flexDirection: "row", gap: 9, alignItems: "flex-start", paddingVertical: 7 },
+  segmentTime: { width: 48, fontSize: 9, fontWeight: "800", paddingTop: 3 },
   segmentText: { flex: 1, fontSize: 15, lineHeight: 24 },
-  editor: { flex: 1, fontSize: 15, lineHeight: 24, padding: 15, minHeight: 240 },
-  workspaceBottom: { paddingTop: 9 },
-  countLine: { flexDirection: "row", justifyContent: "space-between", marginBottom: 5 },
-  countText: { fontSize: 9, fontWeight: "700" },
-  inlineNotice: { fontSize: 10, fontWeight: "700", marginBottom: 6 },
-  resetButton: { alignSelf: "flex-start", paddingVertical: 4, marginBottom: 6 },
-  resetButtonText: { fontSize: 10, fontWeight: "850" },
-  actionRow: { flexDirection: "row", gap: 9 },
-  secondaryAction: { flex: 0.75, minHeight: 48, borderWidth: 1, borderRadius: 14, alignItems: "center", justifyContent: "center" },
-  secondaryActionText: { fontSize: 13, fontWeight: "850" },
-  primaryAction: { flex: 1.25, minHeight: 48, borderRadius: 14, alignItems: "center", justifyContent: "center" },
-  primaryActionText: { color: "#FFFFFF", fontSize: 13, fontWeight: "850" },
-  modalBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "#10182888" },
-  exportSheet: { borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 20 },
-  settingsSheet: { maxHeight: "90%", borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 18, paddingTop: 12 },
-  sheetHandle: { width: 42, height: 4, borderRadius: 2, backgroundColor: "#D0D5DD", alignSelf: "center", marginBottom: 18 },
-  sheetHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  sheetEyebrow: { fontSize: 9, fontWeight: "900", letterSpacing: 1.35, marginBottom: 6 },
-  sheetTitle: { fontSize: 22, fontWeight: "850" },
-  closeButton: { padding: 3, marginLeft: 8 },
-  closeButtonText: { fontSize: 28, lineHeight: 24 },
-  sheetBody: { fontSize: 12, lineHeight: 20, marginTop: 11, marginBottom: 16 },
-  optionRow: { borderWidth: 1, borderRadius: 15, padding: 12, flexDirection: "row", alignItems: "center", gap: 11, marginBottom: 17 },
+  editor: { flex: 1, minHeight: 230, padding: 14, fontSize: 15, lineHeight: 24 },
+  workspaceFooter: { paddingTop: 8 },
+  counts: { flexDirection: "row", justifyContent: "space-between", marginBottom: 4 },
+  tiny: { fontSize: 9, fontWeight: "600" },
+  notice: { fontSize: 10, fontWeight: "700", marginBottom: 5 },
+  reset: { fontSize: 10, fontWeight: "800", paddingVertical: 4, marginBottom: 5 },
+  actionRow: { flexDirection: "row", gap: 8 },
+  secondary: { flex: 1, minHeight: 45, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  secondaryText: { fontSize: 11, fontWeight: "800" },
+  primary: { flex: 1.25, minHeight: 45, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  primaryText: { color: "#FFFFFF", fontSize: 11, fontWeight: "800" },
+  backdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "#10182888" },
+  sheet: { borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 19 },
+  settingsSheet: { maxHeight: "90%", borderTopLeftRadius: 27, borderTopRightRadius: 27, paddingHorizontal: 17, paddingTop: 11 },
+  handle: { width: 42, height: 4, borderRadius: 2, backgroundColor: "#D0D5DD", alignSelf: "center", marginBottom: 17 },
+  sheetTop: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between" },
+  sheetTitle: { fontSize: 21, fontWeight: "800" },
+  close: { fontSize: 28, lineHeight: 25, paddingLeft: 10 },
+  option: { borderWidth: 1, borderRadius: 14, padding: 12, flexDirection: "row", alignItems: "center", gap: 10, marginVertical: 15 },
   checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
-  checkboxMark: { color: "#FFFFFF", fontSize: 14, fontWeight: "900" },
-  optionCopy: { flex: 1 },
-  optionTitle: { fontSize: 13, fontWeight: "850" },
-  optionSubtitle: { fontSize: 10, marginTop: 3 },
-  settingsScroll: { paddingTop: 16, paddingBottom: 16, gap: 10 },
-  settingsHint: { fontSize: 10, lineHeight: 16, marginVertical: 2 },
-  offlineCard: { borderWidth: 1, borderRadius: 18, padding: 13 },
-  providerCard: { borderWidth: 1, borderRadius: 18, padding: 13 },
-  providerHeader: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 11 },
-  providerDot: { width: 9, height: 9, borderRadius: 5 },
-  providerTitle: { fontSize: 13, fontWeight: "850" },
-  providerSubtitle: { fontSize: 9, lineHeight: 14, marginTop: 2 },
-  keyInput: { minHeight: 48, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, marginBottom: 9, fontSize: 12 },
-  providerActions: { flexDirection: "row", gap: 8 },
-  providerPrimary: { flex: 1, minHeight: 44, borderRadius: 12, alignItems: "center", justifyContent: "center" },
-  providerPrimaryText: { color: "#FFFFFF", fontSize: 11, fontWeight: "850" },
-  providerRemove: { minWidth: 86, minHeight: 44, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center" },
-  providerRemoveText: { fontSize: 11, fontWeight: "850" },
-  providerButton: { minHeight: 44, borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center" },
-  providerButtonText: { fontSize: 11, fontWeight: "850" },
+  check: { color: "#FFFFFF", fontSize: 13, fontWeight: "900" },
+  optionTitle: { fontSize: 12, fontWeight: "800" },
+  optionNote: { fontSize: 9, marginTop: 2 },
+  settingsScroll: { gap: 10, paddingTop: 15, paddingBottom: 16 },
+  settingsHint: { fontSize: 9, lineHeight: 15, paddingHorizontal: 2 },
+  providerCard: { borderWidth: 1, borderRadius: 17, padding: 12 },
+  providerTop: { flexDirection: "row", alignItems: "center", gap: 9, marginBottom: 10 },
+  providerTitle: { fontSize: 12, fontWeight: "800" },
+  providerNote: { fontSize: 9, lineHeight: 14, marginTop: 2 },
+  outlineButton: { minHeight: 43, borderWidth: 1, borderRadius: 11, alignItems: "center", justifyContent: "center" },
+  outlineText: { fontSize: 11, fontWeight: "800" },
 });
