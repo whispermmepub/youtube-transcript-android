@@ -2,7 +2,7 @@
 
 - [x] Implement the Library screen with YouTube video and playlist link intake.
 - [x] Add safe local models and persistence for transcript documents, playlist imports, and user edits.
-- [ ] Implement the transcript workspace with preview, edit, save, copy, search, and source-language details.
+- [x] Implement the transcript workspace with preview, edit, save, copy, search, and source-language details.
 - [x] Implement DOCX document generation and Android save/share export.
 - [ ] Add playlist import review, per-video processing states, and completed-item navigation.
 - [x] Add a server-side provider boundary for permitted YouTube metadata and caption retrieval.
@@ -18,5 +18,16 @@
 - [x] Create the private GitHub repository via GitHub REST API using a newly rotated, repository-scoped credential.
 - [x] Never use the PAT previously pasted into chat or commit any GitHub credential to the repository.
 - [x] Change repository visibility from private to public only after confirming no credentials are present in tracked source.
-- [ ] Prepare the project checkpoint for user review and APK generation through the managed Publish flow.
+- [x] Prepare the project checkpoint for user review and APK generation through the managed Publish flow.
 - [ ] Configure a valid transcript provider credential before claiming end-to-end automatic transcription is install-ready.
+- [x] Remove the automatic transcript-provider dependency and all provider-key requirements from the app workflow.
+- [x] Add transcript text paste/import as the primary no-key action with local preview and editing.
+- [x] Update privacy and README copy to describe the local-only no-key behavior.
+- [x] Verify no-key paste, edit, copy, DOCX export, and local persistence flows.
+- [x] Add robust parsing for pasted YouTube transcript formats, including timestamped and SRT-like text.
+- [x] Add transcript search and match navigation in the workspace.
+- [x] Preserve original pasted text separately from edited text and expose reset-to-original.
+- [x] Improve DOCX output formatting for paragraphs, timestamps, metadata, and Burmese/Unicode text.
+- [x] Add deterministic tests for the new no-key quality features.
+- [x] Create a HANDOFF.md that explains the app concept, implemented files, no-key architecture, test commands, limitations, and next-AI instructions.
+- [x] Include the public repository URL and checkpoint/install guidance in the handoff documentation.
