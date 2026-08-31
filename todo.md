@@ -8,18 +8,18 @@
 - [x] Add a server-side provider boundary for permitted YouTube metadata and caption retrieval.
 - [x] Add clear availability, provenance, error, and privacy states.
 - [x] Add unit tests for link parsing, transcript editing, and DOCX export preparation.
-- [ ] Generate a custom app icon and complete app branding configuration.
+- [x] Generate a custom app icon and complete app branding configuration.
 - [ ] Verify the Android build and primary user flows.
 - [x] Create and link a new GitHub repository without storing exposed credentials.
 - [x] Ensure the app has no user account or YouTube login requirement for normal transcript use.
-- [ ] Validate and integrate an automatic server-side transcript provider for pasted public video and playlist links.
+- [x] Validate and integrate an automatic server-side transcript provider for pasted public video and playlist links. (Superseded by the requested no-key scope; intentionally not used.)
 - [x] Create the separate GitHub repository and return its URL after secure authorization.
 - [x] Do not use or store the PAT that was exposed in chat; rely on a rotated credential or OAuth connection.
 - [x] Create the private GitHub repository via GitHub REST API using a newly rotated, repository-scoped credential.
 - [x] Never use the PAT previously pasted into chat or commit any GitHub credential to the repository.
 - [x] Change repository visibility from private to public only after confirming no credentials are present in tracked source.
 - [x] Prepare the project checkpoint for user review and APK generation through the managed Publish flow.
-- [ ] Configure a valid transcript provider credential before claiming end-to-end automatic transcription is install-ready.
+- [x] Configure a valid transcript provider credential before claiming end-to-end automatic transcription is install-ready. (Not applicable after the final no-key product decision.)
 - [x] Remove the automatic transcript-provider dependency and all provider-key requirements from the app workflow.
 - [x] Add transcript text paste/import as the primary no-key action with local preview and editing.
 - [x] Update privacy and README copy to describe the local-only no-key behavior.
@@ -31,3 +31,5 @@
 - [x] Add deterministic tests for the new no-key quality features.
 - [x] Create a HANDOFF.md that explains the app concept, implemented files, no-key architecture, test commands, limitations, and next-AI instructions.
 - [x] Include the public repository URL and checkpoint/install guidance in the handoff documentation.
+- [ ] Generate and hand off a downloadable installable APK through the managed Publish flow.
+- [ ] Document Android sideload installation steps and Google Play Console publishing requirements/costs.
