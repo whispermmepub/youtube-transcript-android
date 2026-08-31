@@ -12,7 +12,7 @@ permissions:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 55
 
     steps:
       - name: Checkout
@@ -36,8 +36,8 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Install dependencies and refresh lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: TypeScript check
         run: pnpm check
@@ -54,16 +54,22 @@ jobs:
         working-directory: android
         run: ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --stacktrace
 
-      - name: Collect APK
+      - name: Collect release files
         run: |
           mkdir -p dist-apk
-          cp android/app/build/outputs/apk/release/app-release.apk dist-apk/YouTube-Transcript-Studio-Standalone-v1.1.0-arm64.apk
+          cp android/app/build/outputs/apk/release/app-release.apk dist-apk/YouTube-Transcript-Studio-v1.2.0-arm64.apk
+          cp pnpm-lock.yaml dist-apk/pnpm-lock.yaml
+          sha256sum dist-apk/YouTube-Transcript-Studio-v1.2.0-arm64.apk | tee dist-apk/SHA256SUMS.txt
+          unzip -t dist-apk/YouTube-Transcript-Studio-v1.2.0-arm64.apk
           ls -lh dist-apk/
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: youtube-transcript-studio-standalone-apk
-          path: dist-apk/YouTube-Transcript-Studio-Standalone-v1.1.0-arm64.apk
+          name: youtube-transcript-studio-v1.2.0-arm64
+          path: |
+            dist-apk/YouTube-Transcript-Studio-v1.2.0-arm64.apk
+            dist-apk/SHA256SUMS.txt
+            dist-apk/pnpm-lock.yaml
           if-no-files-found: error
           retention-days: 7
