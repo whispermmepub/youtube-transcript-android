@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildDocxBase64 } from "../lib/docx-core";
+import { parsePastedTranscript, textToDocument } from "../lib/transcript-content";
 import { parseYouTubeLink } from "../lib/youtube";
 import type { TranscriptDocument } from "../shared/transcript";
 
@@ -30,6 +31,30 @@ describe("YouTube link parsing", () => {
 
   it("rejects non-YouTube links", () => {
     expect(() => parseYouTubeLink("https://example.com/video")).toThrow(/Only youtube.com/);
+  });
+});
+
+describe("No-key pasted transcript parsing", () => {
+  it("cleans SRT/WebVTT cues while preserving timestamps and source text", () => {
+    const source = `WEBVTT
+
+00:00:01,000 --> 00:00:02,000
+မင်္ဂလာပါ
+
+[00:03] Welcome`;
+    const parsed = parsePastedTranscript(source);
+    expect(parsed.hasTimestamps).toBe(true);
+    expect(parsed.cleanText).toBe(`မင်္ဂလာပါ
+Welcome`);
+    expect(parsed.segments[0]).toMatchObject({ text: "မင်္ဂလာပါ", start: 1 });
+    expect(textToDocument(source, "Lecture notes", "https://youtu.be/dQw4w9WgXcQ", "my")).toMatchObject({
+      title: "Lecture notes",
+      language: "my",
+      source: "pasted",
+      sourceText: source,
+      originalText: `မင်္ဂလာပါ
+Welcome`,
+    });
   });
 });
 
