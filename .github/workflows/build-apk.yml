@@ -39,6 +39,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: TypeScript check
+        run: pnpm check
+
+      - name: Unit tests
+        run: pnpm test
+
       - name: Generate Android project
         env:
           CI: '1'
@@ -51,13 +57,13 @@ jobs:
       - name: Collect APK
         run: |
           mkdir -p dist-apk
-          cp android/app/build/outputs/apk/release/app-release.apk dist-apk/YouTube-Transcript-Studio-v1.0.0-arm64.apk
+          cp android/app/build/outputs/apk/release/app-release.apk dist-apk/YouTube-Transcript-Studio-Standalone-v1.1.0-arm64.apk
           ls -lh dist-apk/
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: youtube-transcript-studio-apk-arm64
-          path: dist-apk/YouTube-Transcript-Studio-v1.0.0-arm64.apk
+          name: youtube-transcript-studio-standalone-apk
+          path: dist-apk/YouTube-Transcript-Studio-Standalone-v1.1.0-arm64.apk
           if-no-files-found: error
           retention-days: 7
