@@ -28,7 +28,8 @@ function formatTimestamp(seconds: number): string {
 
 function makeDocumentXml(document: TranscriptDocument, includeTimestamps: boolean): string {
   const title = makeParagraph(document.title);
-  const metadata = makeParagraph(`Language: ${document.language} · ${document.source === "automatic" ? "Automatic captions" : "Creator captions"}`);
+  const sourceLabel = document.source === "automatic" ? "Automatic captions" : document.source === "pasted" ? "Pasted text" : "Creator captions";
+  const metadata = makeParagraph(`Language: ${document.language} · ${sourceLabel}`);
   const body = includeTimestamps
     ? document.segments.map((segment) => makeParagraph(`[${formatTimestamp(segment.start)}] ${segment.text}`)).join("")
     : document.editedText.split(/\r?\n/u).map(makeParagraph).join("");
