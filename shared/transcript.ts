@@ -1,6 +1,6 @@
 export type LinkKind = "video" | "playlist";
 
-export type TranscriptSource = "creator" | "automatic";
+export type TranscriptSource = "creator" | "automatic" | "pasted";
 
 export type TranscriptSegment = {
   text: string;
@@ -17,6 +17,7 @@ export type TranscriptDocument = {
   source: TranscriptSource;
   segments: TranscriptSegment[];
   originalText: string;
+  sourceText?: string;
   editedText: string;
   createdAt: number;
   updatedAt: number;
