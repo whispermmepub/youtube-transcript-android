@@ -2,11 +2,11 @@ import { FFmpegKit, FFprobeKit, ReturnCode } from "@wokcito/ffmpeg-kit-react-nat
 import { Directory, File, Paths } from "expo-file-system";
 import { initWhisper } from "whisper.rn";
 
-import { parseSubtitle } from "@/lib/subtitle-parser";
 import { getConfiguredProviders, transcribeCloudFileAuto, type CloudProvider } from "@/lib/ai-providers";
+import { parseSubtitle } from "@/lib/subtitle-parser";
 import type { ImportedTranscript, TranscriptSegment } from "@/shared/transcript";
 
-export type FileImportMode = "auto" | "no-cloud" | "offline-only" | "best-quality";
+export type FileImportMode = "auto" | "subtitle-only" | "no-cloud" | "offline-only" | "best-quality";
 
 export type LocalMediaStage =
   | "reading"
@@ -106,7 +106,7 @@ async function tryEmbeddedSubtitles(file: File, language?: string): Promise<{ la
         text: parsed.text,
       };
     } catch {
-      // Bitmap/image subtitles cannot be converted to SRT; try the next text stream.
+      // Image/bitmap subtitle streams cannot become plain transcript text without OCR.
     } finally {
       if (out.exists) out.delete();
     }
@@ -117,9 +117,7 @@ async function tryEmbeddedSubtitles(file: File, language?: string): Promise<{ la
 async function convertToWhisperWav(file: File): Promise<File> {
   const output = new File(Paths.cache, `whisper-${Date.now()}.wav`);
   if (output.exists) output.delete();
-  await runFfmpeg(
-    `-y -i ${quote(ffmpegPath(file.uri))} -vn -map 0:a:0? -ac 1 -ar 16000 -c:a pcm_s16le ${quote(ffmpegPath(output.uri))}`,
-  );
+  await runFfmpeg(`-y -i ${quote(ffmpegPath(file.uri))} -vn -map 0:a:0? -ac 1 -ar 16000 -c:a pcm_s16le ${quote(ffmpegPath(output.uri))}`);
   if (!output.exists || output.size < 1024) throw new Error("Could not extract a usable audio track from this file.");
   return output;
 }
@@ -135,8 +133,12 @@ export function getOfflineModelFile(): File {
 }
 
 export function isOfflineModelReady(): boolean {
-  const model = getOfflineModelFile();
-  return model.exists && model.size >= MIN_MODEL_BYTES;
+  try {
+    const model = getOfflineModelFile();
+    return model.exists && model.size >= MIN_MODEL_BYTES;
+  } catch {
+    return false;
+  }
 }
 
 export async function removeOfflineModel(): Promise<void> {
@@ -176,7 +178,11 @@ function whisperSegments(raw: any[]): TranscriptSegment[] {
     .filter((segment) => segment.text && !/^\[(?:BLANK_AUDIO|SOUND|MUSIC)\]$/iu.test(segment.text));
 }
 
-async function transcribeOffline(wav: File, language?: string, onStage?: FileImportOptions["onStage"]): Promise<{ language: string; segments: TranscriptSegment[]; text: string }> {
+async function transcribeOffline(
+  wav: File,
+  language?: string,
+  onStage?: FileImportOptions["onStage"],
+): Promise<{ language: string; segments: TranscriptSegment[]; text: string }> {
   const model = await ensureOfflineModel(onStage);
   onStage?.("offline-transcription", "Running Whisper locally on this phone — media stays on device…");
   const context = await initWhisper({ filePath: model.uri });
@@ -238,6 +244,24 @@ export async function pickTranscriptFile(): Promise<File> {
   return file;
 }
 
+async function localSpeechTranscript(file: File, options: FileImportOptions): Promise<ImportedTranscript> {
+  let wav: File | null = null;
+  try {
+    options.onStage?.("preparing-audio", "Preparing a 16 kHz speech track locally…");
+    wav = await convertToWhisperWav(file);
+    const local = await transcribeOffline(wav, options.language, options.onStage);
+    return importedFromFile(file, "local", "whisper-local", local.language, local.segments, local.text);
+  } finally {
+    if (wav?.exists) wav.delete();
+  }
+}
+
+async function cloudTranscript(file: File, options: FileImportOptions): Promise<ImportedTranscript> {
+  options.onStage?.("cloud-fallback", "Trying an enabled cloud speech provider…");
+  const cloud = await transcribeCloudFileAuto(file, options.language, options.cloudOrder);
+  return importedFromFile(file, "ai", cloud.provider, cloud.language, cloud.segments, cloud.text);
+}
+
 export async function importMediaFile(input: File, options: FileImportOptions = {}): Promise<ImportedTranscript> {
   const mode = options.mode ?? "auto";
   options.onStage?.("reading", `Reading ${input.name}…`);
@@ -254,28 +278,27 @@ export async function importMediaFile(input: File, options: FileImportOptions = 
   const embedded = await tryEmbeddedSubtitles(file, options.language);
   if (embedded) return importedFromFile(input, "embedded", "embedded-subtitle", embedded.language, embedded.segments, embedded.text);
 
-  let wav: File | null = null;
-  let offlineError: Error | null = null;
-  const tryLocal = mode !== "best-quality" || !(await getConfiguredProviders()).length;
-  if (tryLocal) {
+  if (mode === "subtitle-only") {
+    throw new Error("ဒီ file ထဲမှာ text subtitle track မတွေ့ပါ။ Subtitle Only mode က speech AI/model လုံးဝမသုံးပါ။");
+  }
+
+  const configured = await getConfiguredProviders();
+  if (mode === "best-quality" && configured.length) {
     try {
-      options.onStage?.("preparing-audio", "Preparing a 16 kHz speech track locally…");
-      wav = await convertToWhisperWav(file);
-      const local = await transcribeOffline(wav, options.language, options.onStage);
-      return importedFromFile(input, "local", "whisper-local", local.language, local.segments, local.text);
-    } catch (error) {
-      offlineError = error instanceof Error ? error : new Error("Offline transcription failed.");
-      if (mode === "offline-only" || mode === "no-cloud") throw offlineError;
-    } finally {
-      if (wav?.exists) wav.delete();
+      return await cloudTranscript(file, options);
+    } catch {
+      // Cloud failure must not make the file unusable. Fall back to local transcription.
+      return localSpeechTranscript(file, options);
     }
   }
 
-  if (mode === "offline-only" || mode === "no-cloud") {
-    throw offlineError ?? new Error("No local transcript source was available.");
+  try {
+    return await localSpeechTranscript(file, options);
+  } catch (localError) {
+    if (mode === "no-cloud" || mode === "offline-only") throw localError;
+    if (!configured.length) {
+      throw new Error(`${localError instanceof Error ? localError.message : "Offline transcription failed."} Cloud fallback keys are not configured.`);
+    }
+    return cloudTranscript(file, options);
   }
-
-  options.onStage?.("cloud-fallback", "Local methods did not finish reliably; trying an enabled cloud provider…");
-  const cloud = await transcribeCloudFileAuto(file, options.language, options.cloudOrder);
-  return importedFromFile(input, "ai", cloud.provider, cloud.language, cloud.segments, cloud.text);
 }
